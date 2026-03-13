@@ -26,10 +26,9 @@ FONT_SIZE_PAST    = 14    # past line — small and faded
 FONT_SIZE_NEXT    = 14    # next line — small and faded
 
 # ─── Overlay ──────────────────────────────────────────────────────────────────
-OVERLAY_WIDTH   = 600     # pixels
-OVERLAY_OPACITY = 0.92    # 0.0 = invisible, 1.0 = fully solid
-OVERLAY_POSITION = ("center", 80)  # (horizontal, % from top)
-
+OVERLAY_WIDTH    = 700      # medium — comfortable reading width
+OVERLAY_OPACITY  = 0.92     # 0.0 = invisible, 1.0 = fully solid
+OVERLAY_POSITION = ("center", 40)  # top center, 40px from top of screen
 # ─── Hotkey ───────────────────────────────────────────────────────────────────
 TOGGLE_HOTKEY   = "<ctrl>+<shift>+l"
 
