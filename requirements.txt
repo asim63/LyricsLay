@@ -1,0 +1,9 @@
+pyqt6
+shazamio
+sounddevice
+numpy
+requests
+beautifulsoup4
+pynput
+pillow
+faster-whisper
