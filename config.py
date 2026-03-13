@@ -1,5 +1,13 @@
 import os
 
+# ─── FFmpeg path (direct — avoids PATH issues) ────────────────────────────────
+FFMPEG_PATH = r"C:\Users\Asim\AppData\Local\Microsoft\WinGet\Packages\Gyan.FFmpeg_Microsoft.Winget.Source_8wekyb3d8bbwe\ffmpeg-8.0.1-full_build\bin\ffmpeg.exe"
+
+# tell pydub exactly where ffmpeg is
+from pydub.utils import which
+import pydub
+pydub.AudioSegment.converter = FFMPEG_PATH
+
 # ─── Paths ────────────────────────────────────────────────────────────────────
 BASE_DIR   = os.path.dirname(os.path.abspath(__file__))
 CACHE_DIR  = os.path.join(os.path.expanduser("~"), ".lyricslay")
