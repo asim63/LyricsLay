@@ -2,7 +2,10 @@ from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QApplication, QFrame
 )
-from PyQt6.QtCore import Qt, QTimer, QPoint, QSize, pyqtSignal, QEvent
+from PyQt6.QtCore import (
+    Qt, QTimer, QPoint, QSize,
+    pyqtSignal, QEvent
+)
 from PyQt6.QtGui  import QFont
 from src.core     import settings
 import config
@@ -156,6 +159,7 @@ class LyricsOverlay(QWidget):
     - Drag via GripHandle or Alt+click
     - Resize via ResizeHandle
     - Click-through everywhere on main window
+    - Smooth animation on line change
     """
 
     toggle_requested = pyqtSignal()
@@ -169,6 +173,7 @@ class LyricsOverlay(QWidget):
         self.drag_position   = QPoint()
         self.is_visible      = True
         self.is_caption_mode = False
+        self._anim_timer     = None
 
         self._setup_window()
         self._setup_ui()
@@ -190,19 +195,13 @@ class LyricsOverlay(QWidget):
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.setMouseTracking(True)
 
-        # restore saved size or use default width
         w = self.s.get("overlay_width",  700)
         h = self.s.get("overlay_height", 120)
         self.resize(w, h)
 
-        # apply click-through after window handle exists
         QTimer.singleShot(100, self._apply_clickthrough)
 
     def _apply_clickthrough(self):
-        """
-        Uses Windows API to make window truly click-through.
-        More reliable than WA_TransparentForMouseEvents.
-        """
         try:
             import ctypes
             hwnd              = int(self.winId())
@@ -219,7 +218,6 @@ class LyricsOverlay(QWidget):
             print(f"[Overlay] Click-through failed: {e}")
 
     def _enable_drag(self):
-        """Remove WS_EX_TRANSPARENT so mouse events reach window."""
         try:
             import ctypes
             hwnd              = int(self.winId())
@@ -235,7 +233,6 @@ class LyricsOverlay(QWidget):
             pass
 
     def _disable_drag(self):
-        """Re-add WS_EX_TRANSPARENT to restore click-through."""
         try:
             import ctypes
             hwnd              = int(self.winId())
@@ -255,7 +252,6 @@ class LyricsOverlay(QWidget):
         outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(0)
 
-        # ── pill ──────────────────────────────────────────────────────
         self.pill = QFrame()
         self.pill.setStyleSheet("""
             QFrame {
@@ -268,7 +264,7 @@ class LyricsOverlay(QWidget):
         pill_layout.setSpacing(8)
         pill_layout.setContentsMargins(24, 14, 24, 14)
 
-        # past line — small and faded
+        # past line
         self.past_label = QLabel("")
         self.past_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.past_label.setWordWrap(True)
@@ -278,7 +274,7 @@ class LyricsOverlay(QWidget):
         )
         pill_layout.addWidget(self.past_label)
 
-        # current line — bold and bright
+        # current line
         self.current_label = QLabel("")
         self.current_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.current_label.setWordWrap(True)
@@ -291,7 +287,7 @@ class LyricsOverlay(QWidget):
         )
         pill_layout.addWidget(self.current_label)
 
-        # next line — small and faded
+        # next line
         self.next_label = QLabel("")
         self.next_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.next_label.setWordWrap(True)
@@ -311,7 +307,6 @@ class LyricsOverlay(QWidget):
         self.caption_badge.hide()
         pill_layout.addWidget(self.caption_badge)
 
-        # ── container: pill only ──────────────────────────────────────
         container_layout = QHBoxLayout()
         container_layout.setContentsMargins(0, 0, 0, 0)
         container_layout.setSpacing(0)
@@ -329,7 +324,6 @@ class LyricsOverlay(QWidget):
         self.timer.timeout.connect(self._tick)
 
     def _position_window(self):
-        """Default top center, restores last position if valid."""
         screen   = QApplication.primaryScreen()
         screen_w = screen.geometry().width()
         screen_h = screen.geometry().height()
@@ -343,7 +337,6 @@ class LyricsOverlay(QWidget):
                 isinstance(saved_pos, list) and
                 len(saved_pos) == 2):
             x, y = saved_pos[0], saved_pos[1]
-            # safety — reset to center if off screen
             if (x < 0 or x > screen_w - 100 or
                     y < 0 or y > screen_h - 50):
                 self.move(default_x, default_y)
@@ -391,7 +384,6 @@ class LyricsOverlay(QWidget):
     # ─── Lyrics control ──────────────────────────────────────────────
 
     def load_lyrics(self, lyrics: list, caption_mode: bool = False):
-        """Load a new set of lyrics and start displaying them."""
         self.lyrics          = lyrics
         self.current_index   = 0
         self.playback_time   = 0.0
@@ -402,12 +394,42 @@ class LyricsOverlay(QWidget):
         else:
             self.caption_badge.hide()
 
-        self._update_display(0)
+        self._set_display_instant(0)
         self.timer.start()
         print(f"[Overlay] Loaded {len(lyrics)} lines.")
 
+    def _set_display_instant(self, index: int):
+        """Set labels instantly — no animation, used on first load."""
+        total = len(self.lyrics)
+        if total == 0:
+            return
+
+        past_text    = self.lyrics[index - 1]["line"] if index > 0 else ""
+        current_text = self.lyrics[index]["line"]
+        next_text    = (self.lyrics[index + 1]["line"]
+                        if index < total - 1 else "")
+
+        self.past_label.setText(past_text)
+        self.current_label.setText(current_text)
+        self.next_label.setText(next_text)
+
+        self._restore_label_style(self.past_label,    90)
+        self._restore_label_style(self.current_label, 255)
+        self._restore_label_style(self.next_label,    90)
+
+    def _restore_label_style(self, label: QLabel, alpha: int = 255):
+        """Restore clean final style for a label."""
+        is_current = (label is self.current_label)
+        bold = "font-weight: bold;" if is_current else ""
+        size = config.FONT_SIZE_CURRENT if is_current else config.FONT_SIZE_PAST
+        label.setFont(QFont("Arial", size))
+        label.setStyleSheet(
+            f"color: rgba(255,255,255,{alpha});"
+            f"background: transparent;"
+            f"{bold}"
+        )
+
     def _tick(self):
-        """Called every 100ms — advances lyrics."""
         self.playback_time += 0.1
         if not self.lyrics:
             return
@@ -422,7 +444,11 @@ class LyricsOverlay(QWidget):
             self._update_display(new_index)
 
     def _update_display(self, index: int):
-        """Updates the three labels."""
+        """
+        Animates the lyric stack transition.
+        Past fades out, current shrinks+fades to past,
+        next grows+brightens to current — all simultaneously.
+        """
         total = len(self.lyrics)
         if total == 0:
             return
@@ -432,12 +458,76 @@ class LyricsOverlay(QWidget):
         next_text    = (self.lyrics[index + 1]["line"]
                         if index < total - 1 else "")
 
-        self.past_label.setText(past_text)
-        self.current_label.setText(current_text)
-        self.next_label.setText(next_text)
+        # stop any running animation
+        if self._anim_timer and self._anim_timer.isActive():
+            self._anim_timer.stop()
+
+        STEPS    = 14
+        INTERVAL = 16
+        step     = [0]
+        SIZE_BIG   = config.FONT_SIZE_CURRENT
+        SIZE_SMALL = config.FONT_SIZE_PAST
+
+        def ease_out_cubic(t):
+            return 1 - (1 - t) ** 3
+
+        def tick():
+            step[0] += 1
+            t    = step[0] / STEPS
+            ease = ease_out_cubic(t)
+
+            # past → fades out completely
+            alpha_past = int(90 * (1.0 - ease))
+            self.past_label.setStyleSheet(
+                f"color: rgba(255,255,255,{max(0, alpha_past)});"
+                "background: transparent;"
+            )
+
+            # current → shrinks and fades to become new past
+            alpha_cur = int(255 - (255 - 90) * ease)
+            size_cur  = max(SIZE_SMALL,
+                            SIZE_BIG - int((SIZE_BIG - SIZE_SMALL) * ease))
+            font_cur  = QFont("Arial", size_cur)
+            font_cur.setBold(t < 0.5)
+            self.current_label.setFont(font_cur)
+            self.current_label.setStyleSheet(
+                f"color: rgba(255,255,255,{alpha_cur});"
+                "background: transparent;"
+            )
+
+            # next → grows and brightens to become new current
+            alpha_next = int(90 + (255 - 90) * ease)
+            size_next  = min(SIZE_BIG,
+                             SIZE_SMALL + int((SIZE_BIG - SIZE_SMALL) * ease))
+            font_next  = QFont("Arial", size_next)
+            font_next.setBold(t > 0.5)
+            self.next_label.setFont(font_next)
+            self.next_label.setStyleSheet(
+                f"color: rgba(255,255,255,{alpha_next});"
+                "background: transparent;"
+            )
+
+            if step[0] >= STEPS:
+                self._anim_timer.stop()
+
+                # snap everything to final state
+                self.past_label.setText(past_text)
+                self._restore_label_style(self.past_label, 90)
+
+                self.current_label.setText(current_text)
+                self._restore_label_style(self.current_label, 255)
+
+                self.next_label.setText(next_text)
+                self._restore_label_style(self.next_label, 90)
+
+        self._anim_timer = QTimer()
+        self._anim_timer.setInterval(INTERVAL)
+        self._anim_timer.timeout.connect(tick)
+        self._anim_timer.start()
 
     def set_loading(self):
-        """Show loading message."""
+        if self._anim_timer and self._anim_timer.isActive():
+            self._anim_timer.stop()
         self.timer.stop()
         self.past_label.setText("")
         self.current_label.setText("Identifying song...")
@@ -445,14 +535,14 @@ class LyricsOverlay(QWidget):
         self.lyrics = []
 
     def set_no_lyrics(self):
-        """Show no lyrics message."""
         self.timer.stop()
         self.past_label.setText("")
         self.current_label.setText("No lyrics found")
         self.next_label.setText("")
 
     def clear(self):
-        """Clear all labels."""
+        if self._anim_timer and self._anim_timer.isActive():
+            self._anim_timer.stop()
         self.timer.stop()
         self.past_label.setText("")
         self.current_label.setText("")
@@ -460,16 +550,14 @@ class LyricsOverlay(QWidget):
         self.lyrics = []
 
     def add_caption_line(self, line: str):
-        """Live caption mode — scroll lines up."""
         past_text = self.current_label.text()
         self.past_label.setText(past_text)
         self.current_label.setText(line)
         self.next_label.setText("")
 
-    # ─── Alt+drag anywhere ───────────────────────────────────────────
+    # ─── Alt+drag ────────────────────────────────────────────────────
 
     def mousePressEvent(self, event):
-        """Alt + left click anywhere on overlay to drag."""
         alt_held = bool(
             event.modifiers() & Qt.KeyboardModifier.AltModifier
         )
@@ -494,12 +582,10 @@ class LyricsOverlay(QWidget):
             self._disable_drag()
 
     def keyPressEvent(self, event):
-        """Alt held — enable mouse events for Alt+drag."""
         if event.key() == Qt.Key.Key_Alt:
             self._enable_drag()
 
     def keyReleaseEvent(self, event):
-        """Alt released — restore click-through."""
         if event.key() == Qt.Key.Key_Alt:
             if not self.dragging:
                 self._disable_drag()
