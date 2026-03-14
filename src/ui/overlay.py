@@ -1,20 +1,161 @@
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout,
-    QLabel, QApplication, QFrame, QSizeGrip
+    QLabel, QApplication, QFrame
 )
 from PyQt6.QtCore import Qt, QTimer, QPoint, QSize, pyqtSignal, QEvent
-from PyQt6.QtGui  import QFont, QCursor
+from PyQt6.QtGui  import QFont
 from src.core     import settings
 import config
+
+
+class GripHandle(QWidget):
+    """
+    Separate always-interactive window for dragging.
+    Sits to the right of the main overlay.
+    """
+
+    def __init__(self, overlay):
+        super().__init__()
+        self.overlay       = overlay
+        self.dragging      = False
+        self.drag_position = QPoint()
+
+        self.setWindowFlags(
+            Qt.WindowType.FramelessWindowHint  |
+            Qt.WindowType.WindowStaysOnTopHint |
+            Qt.WindowType.Tool
+        )
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        self.setFixedSize(24, 75)
+        self.setCursor(Qt.CursorShape.SizeAllCursor)
+        self.setToolTip("Drag to move · Double-click to hide")
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+
+        label = QLabel("⠿")
+        label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        label.setFont(QFont("Arial", 16))
+        label.setStyleSheet("""
+            color: rgba(255,255,255,160);
+            background: rgba(0,0,0,0.50);
+            border-radius: 8px 8px 0px 0px;
+            padding: 4px;
+        """)
+        layout.addWidget(label)
+
+    def reposition(self):
+        """Sit just to the right of the overlay, top half."""
+        pos = self.overlay.pos()
+        self.move(
+            pos.x() + self.overlay.width() + 4,
+            pos.y()
+        )
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.dragging      = True
+            self.drag_position = (
+                event.globalPosition().toPoint() -
+                self.overlay.frameGeometry().topLeft()
+            )
+
+    def mouseMoveEvent(self, event):
+        if self.dragging:
+            new_pos = (
+                event.globalPosition().toPoint() - self.drag_position
+            )
+            self.overlay.move(new_pos)
+            self.reposition()
+
+    def mouseReleaseEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.dragging = False
+            pos = self.overlay.pos()
+            settings.set("overlay_position", [pos.x(), pos.y()])
+
+    def mouseDoubleClickEvent(self, event):
+        """Double click to toggle overlay."""
+        self.overlay.toggle_requested.emit()
+
+
+class ResizeHandle(QWidget):
+    """
+    Separate always-interactive window for resizing.
+    Sits just below the grip handle, to the right of the overlay.
+    """
+
+    def __init__(self, overlay):
+        super().__init__()
+        self.overlay            = overlay
+        self.resizing           = False
+        self.resize_start_pos   = QPoint()
+        self.resize_start_size  = QSize()
+
+        self.setWindowFlags(
+            Qt.WindowType.FramelessWindowHint  |
+            Qt.WindowType.WindowStaysOnTopHint |
+            Qt.WindowType.Tool
+        )
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        self.setFixedSize(24, 24)
+        self.setCursor(Qt.CursorShape.SizeFDiagCursor)
+        self.setToolTip("Drag to resize")
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+
+        label = QLabel("⌟")
+        label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        label.setFont(QFont("Arial", 14))
+        label.setStyleSheet("""
+            color: rgba(255,255,255,140);
+            background: rgba(0,0,0,0.50);
+            border-radius: 0px 0px 8px 8px;
+        """)
+        layout.addWidget(label)
+
+    def reposition(self):
+        """Sit just below the grip handle."""
+        pos = self.overlay.pos()
+        self.move(
+            pos.x() + self.overlay.width() + 4,
+            pos.y() + self.overlay.height() - self.height()
+        )
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.resizing           = True
+            self.resize_start_pos   = event.globalPosition().toPoint()
+            self.resize_start_size  = self.overlay.size()
+
+    def mouseMoveEvent(self, event):
+        if self.resizing:
+            delta = (
+                event.globalPosition().toPoint() -
+                self.resize_start_pos
+            )
+            new_w = max(300, self.resize_start_size.width()  + delta.x())
+            new_h = max(80,  self.resize_start_size.height() + delta.y())
+            self.overlay.resize(new_w, new_h)
+            self.overlay.grip_handle.reposition()
+            self.reposition()
+
+    def mouseReleaseEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.resizing = False
+            settings.set("overlay_width",  self.overlay.width())
+            settings.set("overlay_height", self.overlay.height())
+
 
 class LyricsOverlay(QWidget):
     """
     The floating lyrics window.
     Frameless, always-on-top, semi-transparent pill background.
     Shows 3 lines: past (faded), current (bold), next (faded).
-    - Drag via grip handle or Alt+click anywhere
-    - Resize by dragging bottom-right corner
-    - Click-through everywhere except grip
+    - Drag via GripHandle or Alt+click
+    - Resize via ResizeHandle
+    - Click-through everywhere on main window
     """
 
     toggle_requested = pyqtSignal()
@@ -34,6 +175,10 @@ class LyricsOverlay(QWidget):
         self._setup_timer()
         self._position_window()
 
+        # separate always-interactive windows for controls
+        self.grip_handle   = GripHandle(self)
+        self.resize_handle = ResizeHandle(self)
+
     # ─── Window setup ────────────────────────────────────────────────
 
     def _setup_window(self):
@@ -43,24 +188,72 @@ class LyricsOverlay(QWidget):
             Qt.WindowType.Tool
         )
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
-        # start as click-through
-        self.setAttribute(
-            Qt.WidgetAttribute.WA_TransparentForMouseEvents, True
-        )
         self.setMouseTracking(True)
-        # set initial size from settings
-        w = self.s.get("overlay_width", 700)
-        self.resize(w, 120)
+
+        # restore saved size or use default width
+        w = self.s.get("overlay_width",  700)
+        h = self.s.get("overlay_height", 120)
+        self.resize(w, h)
+
+        # apply click-through after window handle exists
+        QTimer.singleShot(100, self._apply_clickthrough)
+
+    def _apply_clickthrough(self):
+        """
+        Uses Windows API to make window truly click-through.
+        More reliable than WA_TransparentForMouseEvents.
+        """
+        try:
+            import ctypes
+            hwnd              = int(self.winId())
+            GWL_EXSTYLE       = -20
+            WS_EX_LAYERED     = 0x00080000
+            WS_EX_TRANSPARENT = 0x00000020
+            style = ctypes.windll.user32.GetWindowLongW(hwnd, GWL_EXSTYLE)
+            ctypes.windll.user32.SetWindowLongW(
+                hwnd, GWL_EXSTYLE,
+                style | WS_EX_LAYERED | WS_EX_TRANSPARENT
+            )
+            print("[Overlay] Click-through enabled.")
+        except Exception as e:
+            print(f"[Overlay] Click-through failed: {e}")
+
+    def _enable_drag(self):
+        """Remove WS_EX_TRANSPARENT so mouse events reach window."""
+        try:
+            import ctypes
+            hwnd              = int(self.winId())
+            GWL_EXSTYLE       = -20
+            WS_EX_LAYERED     = 0x00080000
+            WS_EX_TRANSPARENT = 0x00000020
+            style = ctypes.windll.user32.GetWindowLongW(hwnd, GWL_EXSTYLE)
+            ctypes.windll.user32.SetWindowLongW(
+                hwnd, GWL_EXSTYLE,
+                style & ~WS_EX_TRANSPARENT
+            )
+        except Exception:
+            pass
+
+    def _disable_drag(self):
+        """Re-add WS_EX_TRANSPARENT to restore click-through."""
+        try:
+            import ctypes
+            hwnd              = int(self.winId())
+            GWL_EXSTYLE       = -20
+            WS_EX_LAYERED     = 0x00080000
+            WS_EX_TRANSPARENT = 0x00000020
+            style = ctypes.windll.user32.GetWindowLongW(hwnd, GWL_EXSTYLE)
+            ctypes.windll.user32.SetWindowLongW(
+                hwnd, GWL_EXSTYLE,
+                style | WS_EX_LAYERED | WS_EX_TRANSPARENT
+            )
+        except Exception:
+            pass
 
     def _setup_ui(self):
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(0)
-
-        # ── container row: pill + grip ────────────────────────────────
-        container_layout = QHBoxLayout()
-        container_layout.setContentsMargins(0, 0, 0, 0)
-        container_layout.setSpacing(6)
 
         # ── pill ──────────────────────────────────────────────────────
         self.pill = QFrame()
@@ -75,7 +268,7 @@ class LyricsOverlay(QWidget):
         pill_layout.setSpacing(8)
         pill_layout.setContentsMargins(24, 14, 24, 14)
 
-        # past line
+        # past line — small and faded
         self.past_label = QLabel("")
         self.past_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.past_label.setWordWrap(True)
@@ -85,7 +278,7 @@ class LyricsOverlay(QWidget):
         )
         pill_layout.addWidget(self.past_label)
 
-        # current line
+        # current line — bold and bright
         self.current_label = QLabel("")
         self.current_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.current_label.setWordWrap(True)
@@ -98,7 +291,7 @@ class LyricsOverlay(QWidget):
         )
         pill_layout.addWidget(self.current_label)
 
-        # next line
+        # next line — small and faded
         self.next_label = QLabel("")
         self.next_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.next_label.setWordWrap(True)
@@ -118,40 +311,11 @@ class LyricsOverlay(QWidget):
         self.caption_badge.hide()
         pill_layout.addWidget(self.caption_badge)
 
+        # ── container: pill only ──────────────────────────────────────
+        container_layout = QHBoxLayout()
+        container_layout.setContentsMargins(0, 0, 0, 0)
+        container_layout.setSpacing(0)
         container_layout.addWidget(self.pill, stretch=1)
-
-        # ── right column: grip + size grip ───────────────────────────
-        right_col = QVBoxLayout()
-        right_col.setContentsMargins(0, 0, 0, 0)
-        right_col.setSpacing(4)
-
-        # drag grip handle
-        self.grip = QLabel("⠿")
-        self.grip.setFixedWidth(20)
-        self.grip.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.grip.setFont(QFont("Arial", 16))
-        self.grip.setStyleSheet("""
-            color: rgba(255,255,255,140);
-            background: rgba(0,0,0,0.45);
-            border-radius: 8px;
-            padding: 8px 0px;
-        """)
-        self.grip.setCursor(Qt.CursorShape.SizeAllCursor)
-        self.grip.installEventFilter(self)
-        right_col.addWidget(self.grip, stretch=1)
-
-        # resize grip — bottom right corner
-        self.size_grip = QSizeGrip(self)
-        self.size_grip.setFixedSize(16, 16)
-        self.size_grip.setStyleSheet(
-            "background: rgba(255,255,255,60); border-radius: 4px;"
-        )
-        self.size_grip.installEventFilter(self)
-        right_col.addWidget(
-            self.size_grip, 0, Qt.AlignmentFlag.AlignRight
-        )
-
-        container_layout.addLayout(right_col)
 
         container_widget = QWidget()
         container_widget.setStyleSheet("background: transparent;")
@@ -165,30 +329,69 @@ class LyricsOverlay(QWidget):
         self.timer.timeout.connect(self._tick)
 
     def _position_window(self):
-        """
-        Default: top center.
-        If user has moved it before, restore that position.
-        """
-        screen       = QApplication.primaryScreen()
-        screen_w     = screen.geometry().width()
-        window_w     = self.width()
+        """Default top center, restores last position if valid."""
+        screen   = QApplication.primaryScreen()
+        screen_w = screen.geometry().width()
+        screen_h = screen.geometry().height()
+        window_w = self.width()
 
-        # default = top center
         default_x = (screen_w - window_w) // 2
         default_y = 40
 
         saved_pos = self.s.get("overlay_position", None)
-        if (saved_pos and isinstance(saved_pos, list)
-                and len(saved_pos) == 2):
-            # restore saved position
-            self.move(saved_pos[0], saved_pos[1])
+        if (saved_pos and
+                isinstance(saved_pos, list) and
+                len(saved_pos) == 2):
+            x, y = saved_pos[0], saved_pos[1]
+            # safety — reset to center if off screen
+            if (x < 0 or x > screen_w - 100 or
+                    y < 0 or y > screen_h - 50):
+                self.move(default_x, default_y)
+            else:
+                self.move(x, y)
         else:
-            # first launch — top center
             self.move(default_x, default_y)
+
+    # ─── Show / Hide ─────────────────────────────────────────────────
+
+    def show(self):
+        super().show()
+        self.grip_handle.reposition()
+        self.grip_handle.show()
+        self.resize_handle.reposition()
+        self.resize_handle.show()
+
+    def hide(self):
+        super().hide()
+        self.grip_handle.hide()
+        self.resize_handle.hide()
+
+    def toggle(self):
+        if self.is_visible:
+            self.hide()
+            self.is_visible = False
+        else:
+            self.show()
+            self.is_visible = True
+
+    def moveEvent(self, event):
+        super().moveEvent(event)
+        if hasattr(self, 'grip_handle'):
+            self.grip_handle.reposition()
+        if hasattr(self, 'resize_handle'):
+            self.resize_handle.reposition()
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        if hasattr(self, 'grip_handle'):
+            self.grip_handle.reposition()
+        if hasattr(self, 'resize_handle'):
+            self.resize_handle.reposition()
 
     # ─── Lyrics control ──────────────────────────────────────────────
 
     def load_lyrics(self, lyrics: list, caption_mode: bool = False):
+        """Load a new set of lyrics and start displaying them."""
         self.lyrics          = lyrics
         self.current_index   = 0
         self.playback_time   = 0.0
@@ -204,6 +407,7 @@ class LyricsOverlay(QWidget):
         print(f"[Overlay] Loaded {len(lyrics)} lines.")
 
     def _tick(self):
+        """Called every 100ms — advances lyrics."""
         self.playback_time += 0.1
         if not self.lyrics:
             return
@@ -218,6 +422,7 @@ class LyricsOverlay(QWidget):
             self._update_display(new_index)
 
     def _update_display(self, index: int):
+        """Updates the three labels."""
         total = len(self.lyrics)
         if total == 0:
             return
@@ -232,6 +437,7 @@ class LyricsOverlay(QWidget):
         self.next_label.setText(next_text)
 
     def set_loading(self):
+        """Show loading message."""
         self.timer.stop()
         self.past_label.setText("")
         self.current_label.setText("Identifying song...")
@@ -239,12 +445,14 @@ class LyricsOverlay(QWidget):
         self.lyrics = []
 
     def set_no_lyrics(self):
+        """Show no lyrics message."""
         self.timer.stop()
         self.past_label.setText("")
         self.current_label.setText("No lyrics found")
         self.next_label.setText("")
 
     def clear(self):
+        """Clear all labels."""
         self.timer.stop()
         self.past_label.setText("")
         self.current_label.setText("")
@@ -252,62 +460,25 @@ class LyricsOverlay(QWidget):
         self.lyrics = []
 
     def add_caption_line(self, line: str):
+        """Live caption mode — scroll lines up."""
         past_text = self.current_label.text()
         self.past_label.setText(past_text)
         self.current_label.setText(line)
         self.next_label.setText("")
 
-    # ─── Show / Hide ─────────────────────────────────────────────────
-
-    def toggle(self):
-        if self.is_visible:
-            self.hide()
-            self.is_visible = False
-        else:
-            self.show()
-            self.is_visible = True
-
-    # ─── Drag & Resize ───────────────────────────────────────────────
-
-    def _enable_drag(self):
-        """Disable click-through so mouse events reach window."""
-        self.setAttribute(
-            Qt.WidgetAttribute.WA_TransparentForMouseEvents, False
-        )
-
-    def _disable_drag(self):
-        """Re-enable click-through."""
-        self.setAttribute(
-            Qt.WidgetAttribute.WA_TransparentForMouseEvents, True
-        )
-
-    def eventFilter(self, obj, event):
-        """
-        Grip/size_grip hover → enable mouse events.
-        Leave → re-enable click-through.
-        """
-        if obj in (self.grip, self.size_grip):
-            if event.type() == QEvent.Type.Enter:
-                self._enable_drag()
-            elif event.type() == QEvent.Type.Leave:
-                if not self.dragging:
-                    self._disable_drag()
-        return super().eventFilter(obj, event)
+    # ─── Alt+drag anywhere ───────────────────────────────────────────
 
     def mousePressEvent(self, event):
-        """Drag if clicking grip or holding Alt."""
+        """Alt + left click anywhere on overlay to drag."""
         alt_held = bool(
             event.modifiers() & Qt.KeyboardModifier.AltModifier
         )
-        on_grip = self.grip.geometry().contains(event.pos())
-
-        if event.button() == Qt.MouseButton.LeftButton:
-            if alt_held or on_grip:
-                self.dragging      = True
-                self.drag_position = (
-                    event.globalPosition().toPoint() -
-                    self.frameGeometry().topLeft()
-                )
+        if event.button() == Qt.MouseButton.LeftButton and alt_held:
+            self.dragging      = True
+            self.drag_position = (
+                event.globalPosition().toPoint() -
+                self.frameGeometry().topLeft()
+            )
 
     def mouseMoveEvent(self, event):
         if self.dragging:
@@ -318,27 +489,20 @@ class LyricsOverlay(QWidget):
     def mouseReleaseEvent(self, event):
         if event.button() == Qt.MouseButton.LeftButton and self.dragging:
             self.dragging = False
-            # save position AND size
             pos = self.pos()
             settings.set("overlay_position", [pos.x(), pos.y()])
-            settings.set("overlay_width", self.width())
             self._disable_drag()
 
-    def resizeEvent(self, event):
-        """Save size when user resizes via size grip."""
-        super().resizeEvent(event)
-        settings.set("overlay_width", self.width())
-
-    def mouseDoubleClickEvent(self, event):
-        on_grip = self.grip.geometry().contains(event.pos())
-        if on_grip:
-            self.toggle_requested.emit()
-
     def keyPressEvent(self, event):
+        """Alt held — enable mouse events for Alt+drag."""
         if event.key() == Qt.Key.Key_Alt:
             self._enable_drag()
 
     def keyReleaseEvent(self, event):
+        """Alt released — restore click-through."""
         if event.key() == Qt.Key.Key_Alt:
             if not self.dragging:
                 self._disable_drag()
+
+    def eventFilter(self, obj, event):
+        return super().eventFilter(obj, event)
