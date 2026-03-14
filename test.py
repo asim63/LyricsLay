@@ -1,54 +1,13 @@
-# from src.core.audio import record_audio
-# from src.core.recognizer import recognise_song
-# from src.lyrics.fetcher import fetch_lyrics
-# from src.core.cache import cache_song, is_cached
-
-# print("Starting full pipeline test...")
-# print("Play some music!")
-
-# audio = record_audio(5)
-# song = recognise_song(audio)
-
-# if song:
-#     print(f"Song: {song['title']} by {song['artist']}")
-
-#     if is_cached(song['shazam_id']):
-#         print("Already cached — would load instantly!")
-#     else:
-#         lyrics = fetch_lyrics(song['title'], song['artist'])
-#         if lyrics:
-#             cache_song(song['shazam_id'], song['title'], song['artist'], lyrics)
-#             print(f"Lyrics fetched and cached — {len(lyrics)} lines")
-#             print("First 3 lines:")
-#             for line in lyrics[:3]:
-#                 print(f"  {line}")
-#         else:
-#             print("No lyrics found")
-# else:
-#     print("Could not identify song")
-
-
-
-
-# import sys
-# from PyQt6.QtWidgets import QApplication
-# from src.ui.settings_window import SettingsWindow
-# app = QApplication(sys.argv)
-# win = SettingsWindow()
-# win.show()
-# sys.exit(app.exec())
-
-# add this to test.py temporarily and run it
 import sys
 from PyQt6.QtWidgets import QApplication
 from PyQt6.QtCore import QTimer
+from PyQt6.QtGui import QColor
 from src.ui.overlay import LyricsOverlay
 
 app = QApplication(sys.argv)
 overlay = LyricsOverlay()
 overlay.show()
 
-# load fake lyrics to see the scrolling
 fake_lyrics = [
     {"t": 0.0,  "line": ""},
     {"t": 1.0,  "line": "A long long time ago"},
@@ -63,4 +22,36 @@ fake_lyrics = [
 ]
 
 overlay.load_lyrics(fake_lyrics)
+def debug_color():
+    screen = QApplication.primaryScreen()
+    dpr    = screen.devicePixelRatio()
+    geo    = overlay.geometry()
+
+    print(f"\n--- debug ---")
+    print(f"DPR: {dpr}")
+    print(f"Overlay pos: {geo.x()}, {geo.y()}, {geo.width()}x{geo.height()}")
+
+    pixmap = screen.grabWindow(
+        0, geo.x(), geo.y(), geo.width(), geo.height() + 80
+    )
+    print(f"Pixmap null: {pixmap.isNull()}")
+    print(f"Pixmap size: {pixmap.width()}x{pixmap.height()}")
+
+    image = pixmap.toImage()
+
+    cx = image.width() // 2
+    cy = image.height() // 2
+    pixel = image.pixel(cx, cy)
+    color = QColor(pixel)
+    brightness = 0.299*color.red() + 0.587*color.green() + 0.114*color.blue()
+    print(f"Center pixel RGB: {color.red()},{color.green()},{color.blue()}")
+    print(f"Center brightness: {brightness:.1f}")
+    print(f"Decision: {'DARK text' if brightness > 135 else 'WHITE text'}")
+    
+# run debug every 2 seconds
+timer = QTimer()
+timer.setInterval(2000)
+timer.timeout.connect(debug_color)
+timer.start()
+
 sys.exit(app.exec())

@@ -29,9 +29,9 @@ PREFETCH_BEFORE = 30      # seconds before song ends to start prefetching next
 PAST_LINES      = 1       # how many past lines to show faded above current
 MAX_CAPTION_WORDS = 7     # max words per line in live caption mode
 FONT_FAMILY     = "Arial"
-FONT_SIZE_CURRENT = 22    # current line — bold and big
-FONT_SIZE_PAST    = 14    # past line — small and faded
-FONT_SIZE_NEXT    = 14    # next line — small and faded
+FONT_SIZE_CURRENT = 16    # current line — bold and big
+FONT_SIZE_PAST    = 11    # past line — small and faded
+FONT_SIZE_NEXT    = 11    # next line — small and faded
 
 # ─── Overlay ──────────────────────────────────────────────────────────────────
 OVERLAY_WIDTH    = 700      # medium — comfortable reading width
