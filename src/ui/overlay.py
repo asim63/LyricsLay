@@ -173,7 +173,6 @@ class LyricsOverlay(QWidget):
         self.drag_position   = QPoint()
         self.is_visible      = True
         self.is_caption_mode = False
-        self._anim_timer     = None
 
         self._setup_window()
         self._setup_ui()
@@ -383,20 +382,37 @@ class LyricsOverlay(QWidget):
 
     # ─── Lyrics control ──────────────────────────────────────────────
 
-    def load_lyrics(self, lyrics: list, caption_mode: bool = False):
+    def load_lyrics(self, lyrics: list,
+                    caption_mode: bool = False,
+                    start_ms: float = 0.0):
+        """
+        Load lyrics starting at the correct position.
+        start_ms — milliseconds into the song (from Shazam offset)
+        """
         self.lyrics          = lyrics
         self.current_index   = 0
-        self.playback_time   = 0.0
         self.is_caption_mode = caption_mode
+
+        # start at the correct position instead of 0
+        self.playback_time = start_ms / 1000.0
+        print(f"[Overlay] Starting at {self.playback_time:.1f}s")
 
         if caption_mode:
             self.caption_badge.show()
         else:
             self.caption_badge.hide()
 
-        self._set_display_instant(0)
+        # find the correct starting index
+        start_index = 0
+        for i, entry in enumerate(self.lyrics):
+            if entry["t"] <= self.playback_time:
+                start_index = i
+
+        self.current_index = start_index
+        self._set_display_instant(start_index)
         self.timer.start()
-        print(f"[Overlay] Loaded {len(lyrics)} lines.")
+        print(f"[Overlay] Loaded {len(lyrics)} lines "
+              f"starting at line {start_index}.")
 
     def _set_display_instant(self, index: int):
         """Set labels instantly — no animation, used on first load."""
@@ -444,11 +460,7 @@ class LyricsOverlay(QWidget):
             self._update_display(new_index)
 
     def _update_display(self, index: int):
-        """
-        Animates the lyric stack transition.
-        Past fades out, current shrinks+fades to past,
-        next grows+brightens to current — all simultaneously.
-        """
+        """Updates labels instantly — animation in polish phase."""
         total = len(self.lyrics)
         if total == 0:
             return
@@ -458,76 +470,11 @@ class LyricsOverlay(QWidget):
         next_text    = (self.lyrics[index + 1]["line"]
                         if index < total - 1 else "")
 
-        # stop any running animation
-        if self._anim_timer and self._anim_timer.isActive():
-            self._anim_timer.stop()
-
-        STEPS    = 14
-        INTERVAL = 16
-        step     = [0]
-        SIZE_BIG   = config.FONT_SIZE_CURRENT
-        SIZE_SMALL = config.FONT_SIZE_PAST
-
-        def ease_out_cubic(t):
-            return 1 - (1 - t) ** 3
-
-        def tick():
-            step[0] += 1
-            t    = step[0] / STEPS
-            ease = ease_out_cubic(t)
-
-            # past → fades out completely
-            alpha_past = int(90 * (1.0 - ease))
-            self.past_label.setStyleSheet(
-                f"color: rgba(255,255,255,{max(0, alpha_past)});"
-                "background: transparent;"
-            )
-
-            # current → shrinks and fades to become new past
-            alpha_cur = int(255 - (255 - 90) * ease)
-            size_cur  = max(SIZE_SMALL,
-                            SIZE_BIG - int((SIZE_BIG - SIZE_SMALL) * ease))
-            font_cur  = QFont("Arial", size_cur)
-            font_cur.setBold(t < 0.5)
-            self.current_label.setFont(font_cur)
-            self.current_label.setStyleSheet(
-                f"color: rgba(255,255,255,{alpha_cur});"
-                "background: transparent;"
-            )
-
-            # next → grows and brightens to become new current
-            alpha_next = int(90 + (255 - 90) * ease)
-            size_next  = min(SIZE_BIG,
-                             SIZE_SMALL + int((SIZE_BIG - SIZE_SMALL) * ease))
-            font_next  = QFont("Arial", size_next)
-            font_next.setBold(t > 0.5)
-            self.next_label.setFont(font_next)
-            self.next_label.setStyleSheet(
-                f"color: rgba(255,255,255,{alpha_next});"
-                "background: transparent;"
-            )
-
-            if step[0] >= STEPS:
-                self._anim_timer.stop()
-
-                # snap everything to final state
-                self.past_label.setText(past_text)
-                self._restore_label_style(self.past_label, 90)
-
-                self.current_label.setText(current_text)
-                self._restore_label_style(self.current_label, 255)
-
-                self.next_label.setText(next_text)
-                self._restore_label_style(self.next_label, 90)
-
-        self._anim_timer = QTimer()
-        self._anim_timer.setInterval(INTERVAL)
-        self._anim_timer.timeout.connect(tick)
-        self._anim_timer.start()
+        self.past_label.setText(past_text)
+        self.current_label.setText(current_text)
+        self.next_label.setText(next_text)
 
     def set_loading(self):
-        if self._anim_timer and self._anim_timer.isActive():
-            self._anim_timer.stop()
         self.timer.stop()
         self.past_label.setText("")
         self.current_label.setText("Identifying song...")
@@ -541,8 +488,6 @@ class LyricsOverlay(QWidget):
         self.next_label.setText("")
 
     def clear(self):
-        if self._anim_timer and self._anim_timer.isActive():
-            self._anim_timer.stop()
         self.timer.stop()
         self.past_label.setText("")
         self.current_label.setText("")

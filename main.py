@@ -18,7 +18,7 @@ class SignalBridge(QObject):
     Qt UI can only be updated from the main thread —
     we use signals to safely pass data across.
     """
-    show_lyrics   = pyqtSignal(list, bool)   # lyrics, is_caption_mode
+    show_lyrics   = pyqtSignal(list, bool, float)   # lyrics, is_caption_mode
     show_loading  = pyqtSignal()
     show_no_lyrics = pyqtSignal()
     song_changed  = pyqtSignal(str, str)     # title, artist
@@ -48,46 +48,39 @@ class LyricsLayApp:
         self._register_hotkey()
 
     def _connect_signals(self):
-        """Connect bridge signals to overlay methods."""
         self.bridge.show_lyrics.connect(self.overlay.load_lyrics)
         self.bridge.show_loading.connect(self.overlay.set_loading)
         self.bridge.show_no_lyrics.connect(self.overlay.set_no_lyrics)
-
-        # connect overlay toggle signal to tray update
         self.overlay.toggle_requested.connect(self._toggle)
         self.tray.toggle_action.triggered.disconnect()
         self.tray.toggle_action.triggered.connect(self._toggle)
-
+        
     def _toggle(self):
         """Toggle overlay and sync tray menu text."""
         self.overlay.toggle()
         self.tray.update_toggle_text()
 
     def _register_hotkey(self):
-        """
-        Register global hotkey using pynput.
-        Runs in a background thread — hotkeys work
-        even when another app has focus.
-        """
         try:
             from pynput import keyboard
 
             hotkey_str = self.s.get("hotkey", "<ctrl>+<shift>+l")
 
             def on_activate():
-                print(f"[Hotkey] {hotkey_str} pressed")
-                # use QTimer to run toggle on main thread
+                print(f"[Hotkey] Triggered!")
                 QTimer.singleShot(0, self._toggle)
 
-            self.hotkey_listener = keyboard.GlobalHotKeys({
+            # pynput needs the listener kept alive
+            self.hotkey = keyboard.GlobalHotKeys({
                 hotkey_str: on_activate
             })
-            self.hotkey_listener.start()
+            self.hotkey.daemon = True
+            self.hotkey.start()
             print(f"[Hotkey] Registered: {hotkey_str}")
 
         except Exception as e:
-            print(f"[Hotkey] Failed to register: {e}")
-
+            print(f"[Hotkey] Failed: {e}")
+            
     def _unregister_hotkey(self):
         """Stop the hotkey listener."""
         if hasattr(self, 'hotkey_listener'):
@@ -142,7 +135,8 @@ class LyricsLayApp:
                 # skip if same song still playing
                 if shazam_id == self.current_song_id:
                     print(f"[Main] Same song — {title}")
-                    # wait before checking again
+                    # re-sync position in case user skipped
+                    self._resync_position(shazam_id)
                     time.sleep(8)
                     continue
 
@@ -156,7 +150,8 @@ class LyricsLayApp:
                     cached = get_cached_song(shazam_id)
                     print(f"[Main] Loaded from cache!")
                     self.bridge.show_lyrics.emit(
-                        cached["lyrics"], False
+                        cached["lyrics"], False,
+                        song.get("offset_ms", 0.0)
                     )
                     # wait longer before re-checking
                     time.sleep(30)
@@ -168,7 +163,10 @@ class LyricsLayApp:
                 if lyrics:
                     # save to cache
                     cache_song(shazam_id, title, artist, lyrics)
-                    self.bridge.show_lyrics.emit(lyrics, False)
+                    self.bridge.show_lyrics.emit(
+                        lyrics, False,
+                        song.get("offset_ms", 0.0)
+                    )
                     time.sleep(30)
                 else:
                     # no lyrics found — show message
@@ -202,6 +200,26 @@ class LyricsLayApp:
         self.running = False
         self._unregister_hotkey()
         sys.exit(exit_code)
+    
+    def _resync_position(self, shazam_id: str):
+        """
+        Re-syncs lyrics position after user skips within a song.
+        Re-records audio to get current position from Shazam.
+        """
+        if is_cached(shazam_id):
+            cached = get_cached_song(shazam_id)
+            lyrics = cached.get("lyrics", [])
+            if lyrics:
+                print("[Main] Re-syncing position...")
+                try:
+                    audio  = record_audio()
+                    song   = recognise_song(audio)
+                    offset = song.get("offset_ms", 0.0) if song else 0.0
+                except Exception:
+                    offset = 0.0
+
+                self.bridge.show_lyrics.emit(lyrics, False, offset)
+                print(f"[Main] Re-synced at offset: {offset}ms")
 
 
 if __name__ == "__main__":

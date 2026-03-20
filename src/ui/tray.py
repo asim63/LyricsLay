@@ -108,6 +108,10 @@ class SystemTray(QSystemTrayIcon):
         quit_action.triggered.connect(self._quit)
 
         self.setContextMenu(menu)
+        
+        # reset position
+        reset_action = menu.addAction("Reset position")
+        reset_action.triggered.connect(self._reset_position)
 
         # single click also toggles
         self.activated.connect(self._on_activated)
@@ -154,3 +158,17 @@ class SystemTray(QSystemTrayIcon):
             self.toggle_action.setText("Hide lyrics")
         else:
             self.toggle_action.setText("Show lyrics")
+            
+    def _reset_position(self):
+        """Reset overlay to top center of screen."""
+        from src.core import settings
+        settings.set("overlay_position", None)
+        # reposition immediately
+        from PyQt6.QtWidgets import QApplication
+        screen   = QApplication.primaryScreen()
+        screen_w = screen.geometry().width()
+        w        = self.overlay.width()
+        self.overlay.move((screen_w - w) // 2, 40)
+        self.overlay.grip_handle.reposition()
+        self.overlay.resize_handle.reposition()
+        print("[Tray] Position reset to top center.")

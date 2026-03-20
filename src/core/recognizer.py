@@ -44,9 +44,6 @@ def _save_wav(audio: np.ndarray, path: str):
         wf.writeframes(audio.tobytes())
 
 async def _recognise(wav_path: str) -> dict | None:
-    """
-    Internal async function — reads WAV file and sends to Shazam.
-    """
     try:
         out = await shazam.recognize(wav_path)
 
@@ -54,10 +51,17 @@ async def _recognise(wav_path: str) -> dict | None:
             return None
 
         track = out["track"]
+
+        # get song offset if available — tells us where in the song we are
+        offset_ms = 0
+        if "matches" in out and out["matches"]:
+            offset_ms = out["matches"][0].get("offset", 0) * 1000
+
         return {
-            "title":    track.get("title",    "Unknown Title"),
-            "artist":   track.get("subtitle", "Unknown Artist"),
-            "shazam_id": track.get("key",     ""),
+            "title":     track.get("title",    "Unknown Title"),
+            "artist":    track.get("subtitle", "Unknown Artist"),
+            "shazam_id": track.get("key",      ""),
+            "offset_ms": offset_ms,  # how far into the song we are
         }
 
     except Exception as e:
