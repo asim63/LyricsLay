@@ -5,7 +5,7 @@ import os
 import tempfile
 from shazamio import Shazam
 import config
-
+import time 
 shazam = Shazam()
 
 def recognise_song(audio: np.ndarray) -> dict | None:
@@ -15,6 +15,8 @@ def recognise_song(audio: np.ndarray) -> dict | None:
     """
     print("[Recogniser] Sending audio to Shazam...")
 
+    send_time = time.time()
+    
     # save numpy array as a proper WAV file
     wav_path = os.path.join(tempfile.gettempdir(), "lyricslay_sample.wav")
     _save_wav(audio, wav_path)
@@ -30,6 +32,9 @@ def recognise_song(audio: np.ndarray) -> dict | None:
         print("[Recogniser] No match found.")
         return None
 
+    shazam_delay = time.time() - send_time
+    result["shazam_delay_ms"] = shazam_delay * 1000
+    print(f"[Recogniser] Shazam delay: {shazam_delay:.1f}s")
     return result
 
 def _save_wav(audio: np.ndarray, path: str):

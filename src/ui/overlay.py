@@ -460,7 +460,7 @@ class LyricsOverlay(QWidget):
             self._update_display(new_index)
 
     def _update_display(self, index: int):
-        """Updates labels instantly — animation in polish phase."""
+        """Crossfade animation — smooth but never laggy."""
         total = len(self.lyrics)
         if total == 0:
             return
@@ -470,9 +470,65 @@ class LyricsOverlay(QWidget):
         next_text    = (self.lyrics[index + 1]["line"]
                         if index < total - 1 else "")
 
-        self.past_label.setText(past_text)
-        self.current_label.setText(current_text)
-        self.next_label.setText(next_text)
+        # cancel existing animation
+        if hasattr(self, '_anim_timer') and self._anim_timer \
+                and self._anim_timer.isActive():
+            self._anim_timer.stop()
+
+        STEPS    = 6   # very few steps — snappy not laggy
+        INTERVAL = 20  # 20ms each = 120ms total — barely noticeable
+        step     = [0]
+
+        # store target texts
+        targets = {
+            self.past_label:    (past_text,    90),
+            self.current_label: (current_text, 255),
+            self.next_label:    (next_text,    90),
+        }
+
+        def tick():
+            step[0] += 1
+            t = step[0] / STEPS
+
+            # fade out old, fade in new simultaneously
+            for label, (new_text, target_alpha) in targets.items():
+                is_current = (label is self.current_label)
+                bold       = "font-weight: bold;" if is_current else ""
+
+                if step[0] <= STEPS // 2:
+                    # first half — fade out
+                    alpha = int(target_alpha * (1 - t * 2))
+                    label.setStyleSheet(
+                        f"color: rgba(255,255,255,{max(0,alpha)});"
+                        f"background: transparent; {bold}"
+                    )
+                else:
+                    # second half — swap text and fade in
+                    if step[0] == STEPS // 2 + 1:
+                        label.setText(new_text)
+                    progress = (t - 0.5) * 2
+                    alpha    = int(target_alpha * progress)
+                    label.setStyleSheet(
+                        f"color: rgba(255,255,255,{min(target_alpha,alpha)});"
+                        f"background: transparent; {bold}"
+                    )
+
+            if step[0] >= STEPS:
+                self._anim_timer.stop()
+                # snap to clean final state
+                for label, (new_text, alpha) in targets.items():
+                    is_curr = (label is self.current_label)
+                    bold    = "font-weight: bold;" if is_curr else ""
+                    label.setText(new_text)
+                    label.setStyleSheet(
+                        f"color: rgba(255,255,255,{alpha});"
+                        f"background: transparent; {bold}"
+                    )
+
+        self._anim_timer = QTimer()
+        self._anim_timer.setInterval(INTERVAL)
+        self._anim_timer.timeout.connect(tick)
+        self._anim_timer.start()
 
     def set_loading(self):
         self.timer.stop()
