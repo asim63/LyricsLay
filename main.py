@@ -405,9 +405,16 @@ class LyricsLayApp:
                 cache_song(shazam_id, title, artist, lyrics)
                 self.bridge.show_lyrics.emit(lyrics, False, final_offset)
                 print(f"[Identifier] Done. Offset: {final_offset:.0f}ms")
+
+            elif lyrics and not synced:
+                # unsynced — show with auto-scroll, don't cache
+                print("[Identifier] Unsynced lyrics — auto-scroll mode.")
+                self.bridge.show_lyrics.emit(lyrics, False, final_offset)
+
             else:
-                # no synced lyrics available
-                print("[Identifier] No synced lyrics available.")
+                # no lyrics at all
+                cache_song(shazam_id, title, artist, [])
+                print("[Identifier] No lyrics found.")
                 self.bridge.show_no_lyrics.emit()
 
         except Exception as e:

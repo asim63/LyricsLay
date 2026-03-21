@@ -39,7 +39,7 @@ OVERLAY_OPACITY  = 0.92     # 0.0 = invisible, 1.0 = fully solid
 OVERLAY_POSITION = ("center", 40)  # top center, 40px from top of screen
 # ─── Hotkey ───────────────────────────────────────────────────────────────────
 TOGGLE_HOTKEY   = "<ctrl>+<shift>+l"
-
+TOGGLE_REIDENTIFY = "<ctrl>+<shift>+k"  # for when no lyrics found — try again with more audio
 # ─── Live captions ────────────────────────────────────────────────────────────
 WHISPER_MODEL   = "tiny"  # tiny=75MB, base=145MB, small=460MB
                           # tiny is fast enough for real-time on most PCs

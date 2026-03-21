@@ -182,6 +182,10 @@ class LyricsOverlay(QWidget):
         # separate always-interactive windows for controls
         self.grip_handle   = GripHandle(self)
         self.resize_handle = ResizeHandle(self)
+        
+        self._anim_timer              = None
+        self._anim_targets            = {}
+        self._unsynced_secs_per_line  = 6.0  # default fallback
 
     # ─── Window setup ────────────────────────────────────────────────
 
@@ -386,31 +390,41 @@ class LyricsOverlay(QWidget):
                     caption_mode: bool = False,
                     start_ms: float = 0.0):
 
-        # stop existing timer
         self.timer.stop()
-
         self.lyrics          = lyrics
         self.current_index   = 0
         self.is_caption_mode = caption_mode
 
-        if caption_mode:
-            # caption mode — clear labels and show badge
-            self.caption_badge.show()
-            self.past_label.setText("")
-            self.current_label.setText("Listening...")
-            self.next_label.setText("")
-            # don't start timer — captions drive the display
+        if not lyrics:
+            if caption_mode:
+                self.caption_badge.show()
+                self.past_label.setText("")
+                self.current_label.setText("Listening...")
+                self.next_label.setText("")
             return
 
         self.caption_badge.hide()
 
         # check if synced
-        synced = any(entry["t"] > 0 for entry in lyrics) if lyrics else False
+        synced = any(entry["t"] > 0 for entry in lyrics)
 
         if synced:
             self.playback_time = start_ms / 1000.0
         else:
+            # unsynced — start from 0, calculate scroll pace
             self.playback_time = 0.0
+            # estimate song duration from start_ms if available
+            # otherwise assume 210 seconds (3.5 min average)
+            estimated_duration = max(
+                start_ms / 1000.0* 2,  # double current offset
+                210.0                   # minimum 3.5 min estimate
+            )
+            self._unsynced_secs_per_line = (
+                estimated_duration / max(len(lyrics), 1)
+            )
+            print(f"[Overlay] Unsynced — estimated "
+                  f"{self._unsynced_secs_per_line:.1f}s per line "
+                  f"({len(lyrics)} lines)")
 
         # find starting index
         start_index = 0
@@ -471,22 +485,24 @@ class LyricsOverlay(QWidget):
         synced = any(entry["t"] > 0 for entry in self.lyrics)
 
         if synced:
-            # normal synced mode — find correct line by timestamp
+            # synced mode — find line by timestamp
             new_index = self.current_index
             for i, entry in enumerate(self.lyrics):
                 if entry["t"] <= self.playback_time:
                     new_index = i
         else:
-            # unsynced — advance one line every 4 seconds
-            new_index = min(
-                int(self.playback_time / 4),
+            # unsynced — estimate pace from line count
+            # assume average song duration of 210 seconds
+            secs_per_line = self._unsynced_secs_per_line
+            new_index     = min(
+                int(self.playback_time / secs_per_line),
                 len(self.lyrics) - 1
             )
 
         if new_index != self.current_index:
             self.current_index = new_index
             self._update_display(new_index)
-
+            
     def _update_display(self, index: int):
         """Crossfade animation — smooth but never laggy."""
         total = len(self.lyrics)
