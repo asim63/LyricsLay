@@ -385,35 +385,53 @@ class LyricsOverlay(QWidget):
     def load_lyrics(self, lyrics: list,
                     caption_mode: bool = False,
                     start_ms: float = 0.0):
-        """
-        Load lyrics starting at the correct position.
-        start_ms — milliseconds into the song (from Shazam offset)
-        """
+
+        # stop existing timer
+        self.timer.stop()
+
         self.lyrics          = lyrics
         self.current_index   = 0
         self.is_caption_mode = caption_mode
 
-        # start at the correct position instead of 0
-        self.playback_time = start_ms / 1000.0
-        print(f"[Overlay] Starting at {self.playback_time:.1f}s")
-
         if caption_mode:
+            # caption mode — clear labels and show badge
             self.caption_badge.show()
-        else:
-            self.caption_badge.hide()
+            self.past_label.setText("")
+            self.current_label.setText("Listening...")
+            self.next_label.setText("")
+            # don't start timer — captions drive the display
+            return
 
-        # find the correct starting index
+        self.caption_badge.hide()
+
+        # check if synced
+        synced = any(entry["t"] > 0 for entry in lyrics) if lyrics else False
+
+        if synced:
+            self.playback_time = start_ms / 1000.0
+        else:
+            self.playback_time = 0.0
+
+        # find starting index
         start_index = 0
-        for i, entry in enumerate(self.lyrics):
-            if entry["t"] <= self.playback_time:
-                start_index = i
+        if synced:
+            for i, entry in enumerate(lyrics):
+                if entry["t"] <= self.playback_time:
+                    start_index = i
+
+            # safety reset if too far
+            if start_index >= len(lyrics) - 3:
+                print("[Overlay] Offset too far — resetting.")
+                start_index        = 0
+                self.playback_time = 0.0
 
         self.current_index = start_index
         self._set_display_instant(start_index)
         self.timer.start()
         print(f"[Overlay] Loaded {len(lyrics)} lines "
+              f"({'synced' if synced else 'unsynced'}) "
               f"starting at line {start_index}.")
-
+        
     def _set_display_instant(self, index: int):
         """Set labels instantly — no animation, used on first load."""
         total = len(self.lyrics)
@@ -450,10 +468,20 @@ class LyricsOverlay(QWidget):
         if not self.lyrics:
             return
 
-        new_index = self.current_index
-        for i, entry in enumerate(self.lyrics):
-            if entry["t"] <= self.playback_time:
-                new_index = i
+        synced = any(entry["t"] > 0 for entry in self.lyrics)
+
+        if synced:
+            # normal synced mode — find correct line by timestamp
+            new_index = self.current_index
+            for i, entry in enumerate(self.lyrics):
+                if entry["t"] <= self.playback_time:
+                    new_index = i
+        else:
+            # unsynced — advance one line every 4 seconds
+            new_index = min(
+                int(self.playback_time / 4),
+                len(self.lyrics) - 1
+            )
 
         if new_index != self.current_index:
             self.current_index = new_index
@@ -538,10 +566,12 @@ class LyricsOverlay(QWidget):
         self.lyrics = []
 
     def set_no_lyrics(self):
+        """Show message when no lyrics found."""
         self.timer.stop()
         self.past_label.setText("")
-        self.current_label.setText("No lyrics found")
-        self.next_label.setText("")
+        self.current_label.setText("No lyrics available")
+        self.next_label.setText("Press Ctrl+Shift+K to retry")
+        self.lyrics = []
 
     def clear(self):
         self.timer.stop()

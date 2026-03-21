@@ -30,20 +30,28 @@ def get_cached_song(shazam_id: str) -> dict | None:
 
 def cache_song(shazam_id: str, title: str, artist: str, lyrics: list):
     """
-    Saves a song and its lyrics to the cache.
-    lyrics is a list of dicts: [{"t": 14.2, "line": "Good things dont last"}, ...]
+    Saves a song to cache.
+    Only caches if lyrics are properly synced —
+    unsynced lyrics are too unreliable to cache.
     """
-    cache = load_cache()
+    # check if lyrics are synced
+    synced = any(entry["t"] > 0 for entry in lyrics)
 
+    if not synced:
+        print(f"[Cache] Skipping unsynced lyrics for: {title}")
+        return
+
+    cache = load_cache()
     cache[shazam_id] = {
         "title":  title,
         "artist": artist,
         "lyrics": lyrics,
+        "synced": True,
     }
-
     save_cache(cache)
-    print(f"[Cache] Saved: {title} by {artist}")
-
+    print(f"[Cache] Saved: {title} by {artist} "
+          f"({len(lyrics)} synced lines)")
+    
 def is_cached(shazam_id: str) -> bool:
     """
     Quick check — is this song already in the cache?

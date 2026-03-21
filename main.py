@@ -1,3 +1,6 @@
+import os
+os.environ["QT_LOGGING_RULES"] = "qt.text.font.db=false"
+
 import sys
 import threading
 import time
@@ -134,7 +137,7 @@ class LyricsLayApp:
         Also checks position every cycle using same audio.
         """
         print("[Detector] Started.")
-        time.sleep(8)  # wait for initial identification
+        time.sleep(8)
 
         fp_history = []
 
@@ -160,7 +163,6 @@ class LyricsLayApp:
                 fingerprint = self._quick_fingerprint(audio)
 
                 # rolling average of last 4 fingerprints
-                # smooths out momentary fluctuations
                 fp_history.append(fingerprint)
                 if len(fp_history) > 4:
                     fp_history.pop(0)
@@ -168,7 +170,6 @@ class LyricsLayApp:
                 avg_fp = np.mean(fp_history, axis=0)
 
                 if self.current_fingerprint is None:
-                    # first run — trigger identification
                     self.current_fingerprint = avg_fp
                     self._trigger_identification(audio)
                     time.sleep(4)
@@ -178,7 +179,6 @@ class LyricsLayApp:
                 if self._audio_changed(avg_fp, self.current_fingerprint):
                     print("[Detector] Possible change — confirming...")
 
-                    # one confirmation to avoid false positives
                     time.sleep(3)
                     audio2 = record_audio(duration=4)
                     fp2    = self._quick_fingerprint(audio2)
@@ -193,8 +193,7 @@ class LyricsLayApp:
                         print("[Detector] False positive — ignoring.")
 
                 else:
-                    # ── same song — check position every cycle ────────
-                    # reuses already-recorded audio — no extra wait
+                    # same song — check position every cycle
                     if self.current_song_id:
                         threading.Thread(
                             target=self._check_position_jump,
@@ -213,15 +212,12 @@ class LyricsLayApp:
         Checks if user skipped within same song.
         Reuses already-recorded audio — no extra recording.
         Resyncs if position differs by more than 5 seconds.
-        Compensation formula accounts for time elapsed
-        since audio was recorded.
         """
         try:
             song = recognise_song(audio)
             if not song:
                 return
 
-            # check if it's actually a different song
             if song["shazam_id"] != self.current_song_id:
                 print("[Detector] Different song in position check!")
                 self.current_song_id     = None
@@ -232,16 +228,12 @@ class LyricsLayApp:
             new_offset_ms  = song.get("offset_ms", 0.0)
             shazam_delay   = song.get("shazam_delay_ms", 0.0)
 
-            # current position = where Shazam heard us
-            #                  + sample duration
-            #                  + Shazam API delay
             current_pos_ms = (
                 new_offset_ms +
                 config.SAMPLE_DURATION * 1000 +
                 shazam_delay
             )
 
-            # where our playback timer thinks we are
             expected_ms = self.overlay.playback_time * 1000
             diff_ms     = abs(current_pos_ms - expected_ms)
 
@@ -250,7 +242,6 @@ class LyricsLayApp:
                   f"actual: {current_pos_ms/1000:.1f}s  "
                   f"diff: {diff_ms/1000:.1f}s")
 
-            # resync if more than 5 seconds off
             if diff_ms > 5000:
                 print("[Detector] Jump detected! Resyncing...")
                 self._resync_position(
@@ -265,31 +256,25 @@ class LyricsLayApp:
         """
         Stable spectral fingerprint.
         Uses ZCR, spectral centroid, rolloff and RMS.
-        Consistent within same song even across
-        quiet/loud sections.
         """
         if len(audio) == 0:
             return np.zeros(4)
 
         audio_f = audio.astype(float)
 
-        # zero crossing rate — stable within a song
         signs = np.sign(audio_f)
         zcr   = float(np.mean(np.abs(np.diff(signs))) / 2)
 
-        # spectral centroid — tonal center of mass
         fft   = np.abs(np.fft.rfft(audio_f))
         freqs = np.fft.rfftfreq(len(audio_f))
         centroid = float(
             np.sum(freqs * fft) / np.sum(fft)
         ) if np.sum(fft) > 0 else 0.0
 
-        # spectral rolloff — frequency distribution shape
         cumsum    = np.cumsum(fft)
         threshold = 0.85 * cumsum[-1]
         rolloff   = float(freqs[np.searchsorted(cumsum, threshold)])
 
-        # RMS energy — overall loudness
         rms = float(np.sqrt(np.mean(audio_f ** 2)))
 
         return np.array([zcr, centroid, rolloff, rms])
@@ -300,15 +285,12 @@ class LyricsLayApp:
         """
         Returns True if audio changed significantly.
         Compares spectral features — volume independent.
-        40% difference threshold.
         """
-        # silence checks
         if old_fp[3] < 10 and new_fp[3] < 10:
-            return False  # both silent
+            return False
         if old_fp[3] < 10 or new_fp[3] < 10:
-            return True   # silence → music or vice versa
+            return True
 
-        # compare ZCR, centroid, rolloff (skip RMS — too variable)
         diffs = []
         for i in range(3):
             if old_fp[i] == 0:
@@ -351,7 +333,6 @@ class LyricsLayApp:
         try:
             print("[Identifier] Identifying...")
 
-            # need at least 5s for reliable Shazam
             if len(audio) < 16000 * 4:
                 audio = record_audio(duration=5)
 
@@ -373,11 +354,6 @@ class LyricsLayApp:
             print(f"[Identifier] {title} by {artist} "
                   f"(raw offset: {offset_ms:.0f}ms)")
 
-            # ── sync compensation ─────────────────────────────────────
-            # offset_ms    = where in song Shazam heard us
-            # SAMPLE_MS    = duration of audio we recorded
-            # shazam_delay = time Shazam API took to respond
-            # LYRICS_MS    = estimated lyrics fetch time
             SAMPLE_MS = config.SAMPLE_DURATION * 1000
             LYRICS_MS = 500
 
@@ -403,8 +379,7 @@ class LyricsLayApp:
 
             # load from cache — instant, no lyrics fetch delay
             if is_cached(shazam_id):
-                cached      = get_cached_song(shazam_id)
-                # cached songs don't need LYRICS_MS compensation
+                cached       = get_cached_song(shazam_id)
                 cache_offset = offset_ms + SAMPLE_MS + shazam_delay
                 print(f"[Identifier] From cache! ✅ "
                       f"Offset: {cache_offset:.0f}ms")
@@ -416,19 +391,23 @@ class LyricsLayApp:
             # fetch from APIs
             lyrics = fetch_lyrics(title, artist)
 
-            # measure actual fetch time and adjust offset
             actual_lyrics_ms = (time.time() - lyrics_start) * 1000
             final_offset     = max(
                 0, adjusted_offset + actual_lyrics_ms - LYRICS_MS
             )
 
-            if lyrics:
+            # only show and cache synced lyrics
+            synced = lyrics and any(
+                entry["t"] > 0 for entry in lyrics
+            )
+
+            if lyrics and synced:
                 cache_song(shazam_id, title, artist, lyrics)
                 self.bridge.show_lyrics.emit(lyrics, False, final_offset)
-                print(f"[Identifier] Done. "
-                      f"Final offset: {final_offset:.0f}ms")
+                print(f"[Identifier] Done. Offset: {final_offset:.0f}ms")
             else:
-                print("[Identifier] No lyrics found.")
+                # no synced lyrics available
+                print("[Identifier] No synced lyrics available.")
                 self.bridge.show_no_lyrics.emit()
 
         except Exception as e:
@@ -439,10 +418,7 @@ class LyricsLayApp:
             self.identifying = False
 
     def _resync_position(self, shazam_id: str, offset_ms: float):
-        """
-        Resyncs lyrics to correct position.
-        Called after skip detection or same-song reidentification.
-        """
+        """Resyncs lyrics to correct position after skip."""
         if is_cached(shazam_id):
             cached = get_cached_song(shazam_id)
             lyrics = cached.get("lyrics", [])
@@ -457,13 +433,11 @@ class LyricsLayApp:
         """Start everything and enter Qt event loop."""
         self.overlay.show()
 
-        # start change detector
         threading.Thread(
             target=self._change_detector_loop,
             daemon=True
         ).start()
 
-        # initial identification on startup
         threading.Thread(
             target=self._initial_identify,
             daemon=True
@@ -484,7 +458,7 @@ class LyricsLayApp:
         Runs immediately without waiting for detector.
         """
         try:
-            time.sleep(1)  # let UI settle first
+            time.sleep(1)
             audio = record_audio(duration=5)
             self._identify_and_load(audio)
         except Exception as e:
