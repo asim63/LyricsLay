@@ -95,9 +95,8 @@ class LyricsLayApp:
         try:
             from pynput import keyboard
 
-            toggle_key     = self.s.get("hotkey", "<ctrl>+<shift>+l")
-            reidentify_key = "<ctrl>+<shift>+k"
-
+            toggle_key     = self.s.get("hotkey", config.DEFAULT_TOGGLE_HOTKEY)
+            reidentify_key = self.s.get("reidentify_hotkey", config.DEFAULT_REIDENTIFY_HOTKEY)
             def on_toggle():
                 print("[Hotkey] Toggle!")
                 self.bridge.toggle_overlay.emit()

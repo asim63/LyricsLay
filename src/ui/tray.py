@@ -91,31 +91,38 @@ class SystemTray(QSystemTrayIcon):
             }
         """)
 
-        # ── toggle lyrics ─────────────────────────────────────────────
+        # toggle lyrics
         self.toggle_action = menu.addAction("Hide lyrics")
         self.toggle_action.triggered.connect(self._toggle_overlay)
 
+        # close overlay (same as toggle but always hides)
+        close_action = menu.addAction("Close overlay")
+        close_action.triggered.connect(self._close_overlay)
+
         menu.addSeparator()
 
-        # ── settings ──────────────────────────────────────────────────
+        # restart
+        restart_action = menu.addAction("Restart LyricsLay")
+        restart_action.triggered.connect(self._restart)
+
+        menu.addSeparator()
+
+        # settings
         settings_action = menu.addAction("Settings")
         settings_action.triggered.connect(self._open_settings)
 
-        menu.addSeparator()
-
-        # ── quit ──────────────────────────────────────────────────────
-        quit_action = menu.addAction("Quit LyricsLay")
-        quit_action.triggered.connect(self._quit)
-
-        self.setContextMenu(menu)
-        
         # reset position
         reset_action = menu.addAction("Reset position")
         reset_action.triggered.connect(self._reset_position)
 
-        # single click also toggles
-        self.activated.connect(self._on_activated)
+        menu.addSeparator()
 
+        # quit — always last
+        quit_action = menu.addAction("Quit LyricsLay")
+        quit_action.triggered.connect(self._quit)
+
+        self.setContextMenu(menu)
+        self.activated.connect(self._on_activated)
     # ─── Actions ─────────────────────────────────────────────────────
 
     def _toggle_overlay(self):
@@ -172,3 +179,33 @@ class SystemTray(QSystemTrayIcon):
         self.overlay.grip_handle.reposition()
         self.overlay.resize_handle.reposition()
         print("[Tray] Position reset to top center.")
+        
+    def _close_overlay(self):
+        """Always hides the overlay regardless of current state."""
+        if self.overlay.is_visible:
+            self.overlay.hide()
+            self.overlay.is_visible = False
+            self.toggle_action.setText("Show lyrics")
+
+    def _restart(self):
+        """Restart the entire application."""
+        import sys
+        import os
+        print("[Tray] Restarting LyricsLay...")
+        self.overlay.hide()
+        self.hide()
+        # restart by re-executing the current process
+        os.execv(sys.executable, [sys.executable] + sys.argv)
+
+    def _reset_position(self):
+        """Reset overlay to top center of screen."""
+        from src.core import settings
+        from PyQt6.QtWidgets import QApplication
+        settings.set("overlay_position", None)
+        screen   = QApplication.primaryScreen()
+        screen_w = screen.geometry().width()
+        w        = self.overlay.width()
+        self.overlay.move((screen_w - w) // 2, 40)
+        self.overlay.grip_handle.reposition()
+        self.overlay.resize_handle.reposition()
+        print("[Tray] Position reset.")

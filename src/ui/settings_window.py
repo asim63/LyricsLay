@@ -74,18 +74,15 @@ class SettingsWindow(QDialog):
         """)
 
     def _setup_ui(self):
-        """Build the UI layout."""
         layout = QVBoxLayout(self)
         layout.setSpacing(16)
         layout.setContentsMargins(24, 24, 24, 24)
 
-        # title
         title = QLabel("Settings")
         title.setFont(QFont("Arial", 16, QFont.Weight.Bold))
         title.setStyleSheet("color: #cdd6f4;")
         layout.addWidget(title)
 
-        # divider
         divider = QFrame()
         divider.setObjectName("divider")
         divider.setFrameShape(QFrame.Shape.HLine)
@@ -93,34 +90,49 @@ class SettingsWindow(QDialog):
         divider.setFixedHeight(1)
         layout.addWidget(divider)
 
-        # hotkey section
-        hotkey_label = QLabel("Toggle hotkey")
-        hotkey_label.setFont(QFont("Arial", 12))
-        hotkey_label.setStyleSheet("color: #a6adc8;")
-        layout.addWidget(hotkey_label)
+        # ── toggle hotkey ─────────────────────────────────────────────
+        toggle_label = QLabel("Toggle hotkey")
+        toggle_label.setFont(QFont("Arial", 12))
+        toggle_label.setStyleSheet("color: #a6adc8;")
+        layout.addWidget(toggle_label)
 
-        hotkey_desc = QLabel("Press any key combination below to set your hotkey")
-        hotkey_desc.setFont(QFont("Arial", 10))
-        hotkey_desc.setStyleSheet("color: #6c7086;")
-        layout.addWidget(hotkey_desc)
+        toggle_desc = QLabel("Show / hide the lyrics overlay")
+        toggle_desc.setFont(QFont("Arial", 10))
+        toggle_desc.setStyleSheet("color: #6c7086;")
+        layout.addWidget(toggle_desc)
 
-        # key sequence editor — user presses keys and it records them
         self.key_edit = QKeySequenceEdit()
-        current_hotkey = self.current_settings.get("hotkey", "<ctrl>+<shift>+l")
-        # convert pynput format to Qt format for display
-        qt_hotkey = self._pynput_to_qt(current_hotkey)
-        self.key_edit.setKeySequence(QKeySequence(qt_hotkey))
+        current_hotkey = self.current_settings.get(
+            "hotkey", "<ctrl>+<shift>+l"
+        )
+        self.key_edit.setKeySequence(
+            QKeySequence(self._pynput_to_qt(current_hotkey))
+        )
         layout.addWidget(self.key_edit)
 
-        # hint
-        hint = QLabel("Example: Ctrl+Shift+L  or  Ctrl+Alt+Space")
-        hint.setFont(QFont("Arial", 10))
-        hint.setStyleSheet("color: #6c7086;")
-        layout.addWidget(hint)
+        # ── reidentify hotkey ─────────────────────────────────────────
+        reid_label = QLabel("Reidentify hotkey")
+        reid_label.setFont(QFont("Arial", 12))
+        reid_label.setStyleSheet("color: #a6adc8;")
+        layout.addWidget(reid_label)
+
+        reid_desc = QLabel("Force re-detect current song")
+        reid_desc.setFont(QFont("Arial", 10))
+        reid_desc.setStyleSheet("color: #6c7086;")
+        layout.addWidget(reid_desc)
+
+        self.reid_edit = QKeySequenceEdit()
+        current_reid = self.current_settings.get(
+            "reidentify_hotkey", "<ctrl>+<shift>+k"
+        )
+        self.reid_edit.setKeySequence(
+            QKeySequence(self._pynput_to_qt(current_reid))
+        )
+        layout.addWidget(self.reid_edit)
 
         layout.addStretch()
 
-       # buttons row
+        # buttons
         btn_row = QHBoxLayout()
         btn_row.setSpacing(10)
 
@@ -133,7 +145,7 @@ class SettingsWindow(QDialog):
         reset_btn = QPushButton("Reset to default")
         reset_btn.setMinimumHeight(36)
         reset_btn.setMinimumWidth(130)
-        reset_btn.clicked.connect(self._reset_hotkey)
+        reset_btn.clicked.connect(self._reset_hotkeys)
         btn_row.addWidget(reset_btn)
 
         save_btn = QPushButton("Save")
@@ -144,6 +156,31 @@ class SettingsWindow(QDialog):
         btn_row.addWidget(save_btn)
 
         layout.addLayout(btn_row)
+
+    def _save(self):
+        """Save both hotkeys."""
+        qt_toggle = self.key_edit.keySequence().toString()
+        qt_reid   = self.reid_edit.keySequence().toString()
+
+        if qt_toggle:
+            pynput_toggle = self._qt_to_pynput(qt_toggle)
+            settings.set("hotkey", pynput_toggle)
+
+        if qt_reid:
+            pynput_reid = self._qt_to_pynput(qt_reid)
+            settings.set("reidentify_hotkey", pynput_reid)
+
+        if self.on_hotkey_changed:
+            self.on_hotkey_changed(
+                settings.get("hotkey"),
+                settings.get("reidentify_hotkey")
+            )
+        self.accept()
+
+    def _reset_hotkeys(self):
+        """Reset both hotkeys to defaults."""
+        self.key_edit.setKeySequence(QKeySequence("Ctrl+Shift+L"))
+        self.reid_edit.setKeySequence(QKeySequence("Ctrl+Shift+K"))
 
     def _save(self):
         """Save the new hotkey and notify the app."""

@@ -4,12 +4,14 @@ import config
 
 # default settings — used on first launch
 DEFAULTS = {
-    "hotkey":           "<ctrl>+<shift>+l",
-    "overlay_position": list(config.OVERLAY_POSITION),
-    "overlay_width":    config.OVERLAY_WIDTH,
-    "overlay_opacity":  config.OVERLAY_OPACITY,
-    "font_size":        config.FONT_SIZE_CURRENT,
-    "show_on_startup":  True,
+    "hotkey":              config.DEFAULT_TOGGLE_HOTKEY,
+    "reidentify_hotkey":   config.DEFAULT_REIDENTIFY_HOTKEY,
+    "overlay_position":    None,
+    "overlay_width":       config.OVERLAY_WIDTH,
+    "overlay_height":      120,
+    "overlay_opacity":     config.OVERLAY_OPACITY,
+    "font_size":           config.FONT_SIZE_CURRENT,
+    "show_on_startup":     True,
 }
 
 SETTINGS_FILE = os.path.join(config.CACHE_DIR, "settings.json")
