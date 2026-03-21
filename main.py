@@ -11,6 +11,7 @@ from src.core.cache      import is_cached, get_cached_song, cache_song
 from src.lyrics.fetcher  import fetch_lyrics
 from src.ui.overlay      import LyricsOverlay
 from src.ui.tray         import SystemTray
+import config
 
 
 class SignalBridge(QObject):
@@ -18,19 +19,25 @@ class SignalBridge(QObject):
     Bridge between background threads and Qt main thread.
     Qt UI can only be updated from the main thread.
     """
-    show_lyrics    = pyqtSignal(list, bool, float)
-    show_loading   = pyqtSignal()
-    show_no_lyrics = pyqtSignal()
-    song_changed   = pyqtSignal(str, str)
-    toggle_overlay = pyqtSignal()
+    show_lyrics      = pyqtSignal(list, bool, float)
+    show_loading     = pyqtSignal()
+    show_no_lyrics   = pyqtSignal()
+    song_changed     = pyqtSignal(str, str)
+    toggle_overlay   = pyqtSignal()
+    force_reidentify = pyqtSignal()
 
 
 class LyricsLayApp:
     """
     Main application controller.
+
     Two-thread architecture:
-    - Fast detector: checks every 2s if audio changed
-    - Identifier: full Shazam call when change detected
+    - Fast detector : checks every 4s if audio changed
+    - Identifier    : full Shazam call when change detected
+
+    Hotkeys:
+    - Ctrl+Shift+L : toggle overlay
+    - Ctrl+Shift+K : force reidentify current song
     """
 
     def __init__(self):
@@ -42,22 +49,24 @@ class LyricsLayApp:
         self.bridge  = SignalBridge()
         self.s       = settings.load_settings()
 
-        self.current_song_id     = None
-        self.current_fingerprint = None
-        self.running             = True
-        self.identifying         = False
+        self.current_song_id       = None
+        self.current_fingerprint   = None
+        self.last_offset_ms        = 0.0
+        self.running               = True
+        self.identifying           = False
+        self.force_reidentify_flag = False
 
         self._connect_signals()
-        self._register_hotkey()
+        self._register_hotkeys()
 
     # ─── Signals ─────────────────────────────────────────────────────
 
     def _connect_signals(self):
-        """Connect bridge signals to overlay and tray."""
         self.bridge.show_lyrics.connect(self.overlay.load_lyrics)
         self.bridge.show_loading.connect(self.overlay.set_loading)
         self.bridge.show_no_lyrics.connect(self.overlay.set_no_lyrics)
         self.bridge.toggle_overlay.connect(self._toggle)
+        self.bridge.force_reidentify.connect(self._on_force_reidentify)
 
         self.overlay.toggle_requested.connect(self._toggle)
         self.tray.toggle_action.triggered.disconnect()
@@ -68,178 +77,281 @@ class LyricsLayApp:
         self.overlay.toggle()
         self.tray.update_toggle_text()
 
-    # ─── Hotkey ──────────────────────────────────────────────────────
+    def _on_force_reidentify(self):
+        """Called when user presses Ctrl+Shift+K."""
+        print("[Hotkey] Force reidentify requested!")
+        self.force_reidentify_flag = True
+        self.current_song_id       = None
+        self.current_fingerprint   = None
 
-    def _register_hotkey(self):
-        """Register global hotkey in background thread."""
+    # ─── Hotkeys ─────────────────────────────────────────────────────
+
+    def _register_hotkeys(self):
+        """Register all global hotkeys."""
         try:
             from pynput import keyboard
 
-            hotkey_str = self.s.get("hotkey", "<ctrl>+<shift>+l")
+            toggle_key     = self.s.get("hotkey", "<ctrl>+<shift>+l")
+            reidentify_key = "<ctrl>+<shift>+k"
 
-            def on_activate():
-                print(f"[Hotkey] Triggered!")
-                # emit signal — safely crosses thread boundary
+            def on_toggle():
+                print("[Hotkey] Toggle!")
                 self.bridge.toggle_overlay.emit()
 
+            def on_reidentify():
+                print("[Hotkey] Force reidentify!")
+                self.bridge.force_reidentify.emit()
+
             self.hotkey = keyboard.GlobalHotKeys({
-                hotkey_str: on_activate
+                toggle_key:     on_toggle,
+                reidentify_key: on_reidentify,
             })
             self.hotkey.daemon = True
             self.hotkey.start()
-            print(f"[Hotkey] Registered: {hotkey_str}")
+            print(f"[Hotkey] Toggle:     {toggle_key}")
+            print(f"[Hotkey] Reidentify: {reidentify_key}")
 
         except Exception as e:
             print(f"[Hotkey] Failed: {e}")
 
-    def _unregister_hotkey(self):
-        """Stop the hotkey listener."""
+    def _unregister_hotkeys(self):
+        """Stop all hotkey listeners."""
         if hasattr(self, 'hotkey'):
             self.hotkey.stop()
 
     def re_register_hotkey(self, new_hotkey: str):
         """Called when user changes hotkey in settings."""
-        self._unregister_hotkey()
+        self._unregister_hotkeys()
         self.s = settings.load_settings()
-        self._register_hotkey()
+        self._register_hotkeys()
 
     # ─── Fast change detector ─────────────────────────────────────────
 
     def _change_detector_loop(self):
         """
-        Runs every 2 seconds.
-        Records a short 2s clip and checks if audio
-        changed significantly from the current song.
-        If changed — triggers full identification.
+        Runs continuously every 4 seconds.
+        Records audio, checks fingerprint for song changes.
+        Also checks position every cycle using same audio.
         """
         print("[Detector] Started.")
+        time.sleep(8)  # wait for initial identification
 
-        # wait for first identification to complete
-        time.sleep(8)
+        fp_history = []
 
         while self.running:
             try:
+                # force reidentify requested via hotkey
+                if self.force_reidentify_flag:
+                    self.force_reidentify_flag = False
+                    fp_history                 = []
+                    print("[Detector] Force reidentifying...")
+                    audio = record_audio(duration=5)
+                    self._trigger_identification(audio, force=True)
+                    time.sleep(3)
+                    continue
+
                 if self.identifying:
                     time.sleep(1)
                     continue
 
-                # short 2s sample — just enough to detect change
-                audio       = record_audio(duration=2)
+                # record 4s audio — used for both fingerprint
+                # and position check (no double recording)
+                audio       = record_audio(duration=4)
                 fingerprint = self._quick_fingerprint(audio)
+
+                # rolling average of last 4 fingerprints
+                # smooths out momentary fluctuations
+                fp_history.append(fingerprint)
+                if len(fp_history) > 4:
+                    fp_history.pop(0)
+
+                avg_fp = np.mean(fp_history, axis=0)
 
                 if self.current_fingerprint is None:
                     # first run — trigger identification
-                    self.current_fingerprint = fingerprint
+                    self.current_fingerprint = avg_fp
                     self._trigger_identification(audio)
+                    time.sleep(4)
+                    continue
 
-                elif self._audio_changed(fingerprint,
-                                         self.current_fingerprint):
-                    print("[Detector] Audio change detected!")
-                    self.current_fingerprint = fingerprint
-                    self.current_song_id     = None
-                    self._trigger_identification(audio)
+                # ── check for song change ─────────────────────────────
+                if self._audio_changed(avg_fp, self.current_fingerprint):
+                    print("[Detector] Possible change — confirming...")
 
-                # check every 2 seconds
-                time.sleep(2)
+                    # one confirmation to avoid false positives
+                    time.sleep(3)
+                    audio2 = record_audio(duration=4)
+                    fp2    = self._quick_fingerprint(audio2)
+
+                    if self._audio_changed(fp2, self.current_fingerprint):
+                        print("[Detector] Change confirmed!")
+                        self.current_fingerprint = avg_fp
+                        self.current_song_id     = None
+                        fp_history               = []
+                        self._trigger_identification(audio2)
+                    else:
+                        print("[Detector] False positive — ignoring.")
+
+                else:
+                    # ── same song — check position every cycle ────────
+                    # reuses already-recorded audio — no extra wait
+                    if self.current_song_id:
+                        threading.Thread(
+                            target=self._check_position_jump,
+                            args=(audio,),
+                            daemon=True
+                        ).start()
+
+                time.sleep(4)
 
             except Exception as e:
                 print(f"[Detector] Error: {e}")
                 time.sleep(3)
 
+    def _check_position_jump(self, audio: np.ndarray):
+        """
+        Checks if user skipped within same song.
+        Reuses already-recorded audio — no extra recording.
+        Resyncs if position differs by more than 5 seconds.
+        Compensation formula accounts for time elapsed
+        since audio was recorded.
+        """
+        try:
+            song = recognise_song(audio)
+            if not song:
+                return
+
+            # check if it's actually a different song
+            if song["shazam_id"] != self.current_song_id:
+                print("[Detector] Different song in position check!")
+                self.current_song_id     = None
+                self.current_fingerprint = None
+                self._trigger_identification(audio)
+                return
+
+            new_offset_ms  = song.get("offset_ms", 0.0)
+            shazam_delay   = song.get("shazam_delay_ms", 0.0)
+
+            # current position = where Shazam heard us
+            #                  + sample duration
+            #                  + Shazam API delay
+            current_pos_ms = (
+                new_offset_ms +
+                config.SAMPLE_DURATION * 1000 +
+                shazam_delay
+            )
+
+            # where our playback timer thinks we are
+            expected_ms = self.overlay.playback_time * 1000
+            diff_ms     = abs(current_pos_ms - expected_ms)
+
+            print(f"[Detector] Position — "
+                  f"expected: {expected_ms/1000:.1f}s  "
+                  f"actual: {current_pos_ms/1000:.1f}s  "
+                  f"diff: {diff_ms/1000:.1f}s")
+
+            # resync if more than 5 seconds off
+            if diff_ms > 5000:
+                print("[Detector] Jump detected! Resyncing...")
+                self._resync_position(
+                    self.current_song_id,
+                    current_pos_ms
+                )
+
+        except Exception as e:
+            print(f"[Detector] Position check error: {e}")
+
     def _quick_fingerprint(self, audio: np.ndarray) -> np.ndarray:
         """
-        Creates a stable spectral fingerprint.
-        Returns energy per frequency band — more unique
-        and stable than simple RMS energy.
+        Stable spectral fingerprint.
+        Uses ZCR, spectral centroid, rolloff and RMS.
+        Consistent within same song even across
+        quiet/loud sections.
         """
         if len(audio) == 0:
-            return np.zeros(8)
+            return np.zeros(4)
 
-        # split into 8 frequency-like bands using chunking
-        # more stable than raw energy sum
-        chunk_size = max(1, len(audio) // 8)
-        bands      = []
+        audio_f = audio.astype(float)
 
-        for i in range(8):
-            start  = i * chunk_size
-            end    = start + chunk_size
-            chunk  = audio[start:end].astype(float)
-            if len(chunk) > 0:
-                # use median instead of mean — resistant to spikes
-                energy = float(np.sqrt(np.median(chunk ** 2)))
-            else:
-                energy = 0.0
-            bands.append(energy)
+        # zero crossing rate — stable within a song
+        signs = np.sign(audio_f)
+        zcr   = float(np.mean(np.abs(np.diff(signs))) / 2)
 
-        return np.array(bands)
+        # spectral centroid — tonal center of mass
+        fft   = np.abs(np.fft.rfft(audio_f))
+        freqs = np.fft.rfftfreq(len(audio_f))
+        centroid = float(
+            np.sum(freqs * fft) / np.sum(fft)
+        ) if np.sum(fft) > 0 else 0.0
+
+        # spectral rolloff — frequency distribution shape
+        cumsum    = np.cumsum(fft)
+        threshold = 0.85 * cumsum[-1]
+        rolloff   = float(freqs[np.searchsorted(cumsum, threshold)])
+
+        # RMS energy — overall loudness
+        rms = float(np.sqrt(np.mean(audio_f ** 2)))
+
+        return np.array([zcr, centroid, rolloff, rms])
 
     def _audio_changed(self,
                        new_fp: np.ndarray,
                        old_fp: np.ndarray) -> bool:
         """
-        Compares two fingerprints.
-        Only returns True if audio changed significantly.
-        Uses cosine distance — stable against volume changes.
+        Returns True if audio changed significantly.
+        Compares spectral features — volume independent.
+        40% difference threshold.
         """
-        # handle silence → music transition
-        old_energy = float(np.sum(old_fp))
-        new_energy = float(np.sum(new_fp))
+        # silence checks
+        if old_fp[3] < 10 and new_fp[3] < 10:
+            return False  # both silent
+        if old_fp[3] < 10 or new_fp[3] < 10:
+            return True   # silence → music or vice versa
 
-        # if both are silence — no change
-        if old_energy < 50 and new_energy < 50:
+        # compare ZCR, centroid, rolloff (skip RMS — too variable)
+        diffs = []
+        for i in range(3):
+            if old_fp[i] == 0:
+                continue
+            diff = abs(new_fp[i] - old_fp[i]) / (abs(old_fp[i]) + 1e-8)
+            diffs.append(diff)
+
+        if not diffs:
             return False
 
-        # if one is silence and other isn't — definite change
-        if old_energy < 50 or new_energy < 50:
-            return True
-
-        # cosine similarity — volume independent
-        dot      = float(np.dot(new_fp, old_fp))
-        norm     = float(np.linalg.norm(new_fp) *
-                         np.linalg.norm(old_fp))
-        if norm == 0:
-            return False
-
-        similarity = dot / norm
-        changed    = similarity < 0.85  # 85% similarity threshold
+        avg_diff = float(np.mean(diffs))
+        changed  = avg_diff > 0.40
 
         if changed:
-            print(f"[Detector] Similarity: {similarity:.2%} → change!")
+            print(f"[Detector] Spectral diff: {avg_diff:.2%}")
         return changed
 
-    def _trigger_identification(self, audio: np.ndarray):
-        """
-        Starts full identification in a separate thread.
-        Passes already-recorded audio to avoid re-recording.
-        """
-        if self.identifying:
+    def _trigger_identification(self, audio: np.ndarray,
+                                 force: bool = False):
+        """Start full identification in background thread."""
+        if self.identifying and not force:
             return
 
-        thread = threading.Thread(
+        threading.Thread(
             target=self._identify_and_load,
             args=(audio,),
             daemon=True
-        )
-        thread.start()
+        ).start()
 
     # ─── Full identifier ──────────────────────────────────────────────
 
     def _identify_and_load(self, audio: np.ndarray):
         """
-        Full identification pipeline:
-        Audio → Shazam → Lyrics → Overlay
-        Compensates for recording + API delay in offset.
+        Full pipeline: Audio → Shazam → Lyrics → Overlay.
+        Compensates for recording + API delay in sync offset.
         """
         self.identifying = True
         self.bridge.show_loading.emit()
 
         try:
-            print("[Identifier] Identifying song...")
+            print("[Identifier] Identifying...")
 
-            # record start time to measure total pipeline delay
-            pipeline_start = time.time()
-
-            # if audio is only 2s, record a full 5s for Shazam accuracy
+            # need at least 5s for reliable Shazam
             if len(audio) < 16000 * 4:
                 audio = record_audio(duration=5)
 
@@ -261,26 +373,20 @@ class LyricsLayApp:
             print(f"[Identifier] {title} by {artist} "
                   f"(raw offset: {offset_ms:.0f}ms)")
 
-            # ── compensate for pipeline delay ─────────────────────────
-            # offset_ms = where in song Shazam heard us
-            # We add:
-            #   + sample duration (audio we recorded)
-            #   + shazam API delay
-            #   + estimated lyrics fetch time
-            SAMPLE_MS    = config.SAMPLE_DURATION * 1000
-            LYRICS_MS    = 1500   # avg lyrics fetch time
-            pipeline_ms  = (time.time() - pipeline_start) * 1000
+            # ── sync compensation ─────────────────────────────────────
+            # offset_ms    = where in song Shazam heard us
+            # SAMPLE_MS    = duration of audio we recorded
+            # shazam_delay = time Shazam API took to respond
+            # LYRICS_MS    = estimated lyrics fetch time
+            SAMPLE_MS = config.SAMPLE_DURATION * 1000
+            LYRICS_MS = 500
 
             adjusted_offset = (
-                offset_ms    +
-                SAMPLE_MS    +
+                offset_ms +
+                SAMPLE_MS +
                 shazam_delay +
                 LYRICS_MS
             )
-
-            print(f"[Identifier] Adjusted offset: "
-                  f"{adjusted_offset:.0f}ms "
-                  f"(pipeline: {pipeline_ms:.0f}ms)")
 
             # same song — just resync position
             if shazam_id == self.current_song_id:
@@ -290,31 +396,37 @@ class LyricsLayApp:
 
             # new song!
             self.current_song_id = shazam_id
+            self.last_offset_ms  = adjusted_offset
             self.bridge.song_changed.emit(title, artist)
 
-            # ── fetch lyrics ──────────────────────────────────────────
             lyrics_start = time.time()
 
+            # load from cache — instant, no lyrics fetch delay
             if is_cached(shazam_id):
-                cached = get_cached_song(shazam_id)
-                print("[Identifier] Loaded from cache!")
-                # cache is instant so no extra delay needed
+                cached      = get_cached_song(shazam_id)
+                # cached songs don't need LYRICS_MS compensation
+                cache_offset = offset_ms + SAMPLE_MS + shazam_delay
+                print(f"[Identifier] From cache! ✅ "
+                      f"Offset: {cache_offset:.0f}ms")
                 self.bridge.show_lyrics.emit(
-                    cached["lyrics"], False, adjusted_offset
+                    cached["lyrics"], False, cache_offset
                 )
                 return
 
+            # fetch from APIs
             lyrics = fetch_lyrics(title, artist)
 
-            # measure actual lyrics fetch time and add it
+            # measure actual fetch time and adjust offset
             actual_lyrics_ms = (time.time() - lyrics_start) * 1000
-            final_offset     = adjusted_offset + actual_lyrics_ms - LYRICS_MS
-            final_offset     = max(0, final_offset)
+            final_offset     = max(
+                0, adjusted_offset + actual_lyrics_ms - LYRICS_MS
+            )
 
             if lyrics:
                 cache_song(shazam_id, title, artist, lyrics)
                 self.bridge.show_lyrics.emit(lyrics, False, final_offset)
-                print(f"[Identifier] Final offset: {final_offset:.0f}ms")
+                print(f"[Identifier] Done. "
+                      f"Final offset: {final_offset:.0f}ms")
             else:
                 print("[Identifier] No lyrics found.")
                 self.bridge.show_no_lyrics.emit()
@@ -327,47 +439,49 @@ class LyricsLayApp:
             self.identifying = False
 
     def _resync_position(self, shazam_id: str, offset_ms: float):
-        """Resync lyrics to current position after skip."""
+        """
+        Resyncs lyrics to correct position.
+        Called after skip detection or same-song reidentification.
+        """
         if is_cached(shazam_id):
             cached = get_cached_song(shazam_id)
             lyrics = cached.get("lyrics", [])
             if lyrics:
-                print(f"[Identifier] Resyncing at {offset_ms:.0f}ms")
+                print(f"[Identifier] Resyncing at "
+                      f"{offset_ms/1000:.1f}s")
                 self.bridge.show_lyrics.emit(lyrics, False, offset_ms)
 
     # ─── Run ─────────────────────────────────────────────────────────
 
     def run(self):
-        """Start everything and run the app."""
+        """Start everything and enter Qt event loop."""
         self.overlay.show()
 
-        # start change detector in background thread
-        detector_thread = threading.Thread(
+        # start change detector
+        threading.Thread(
             target=self._change_detector_loop,
             daemon=True
-        )
-        detector_thread.start()
+        ).start()
 
-        # also start initial identification immediately
-        init_thread = threading.Thread(
+        # initial identification on startup
+        threading.Thread(
             target=self._initial_identify,
             daemon=True
-        )
-        init_thread.start()
+        ).start()
 
         print("[Main] LyricsLay started!")
-        print("[Main] Toggle: Ctrl+Shift+L")
+        print("[Main] Ctrl+Shift+L → toggle overlay")
+        print("[Main] Ctrl+Shift+K → force reidentify")
 
         exit_code = self.app.exec()
-
         self.running = False
-        self._unregister_hotkey()
+        self._unregister_hotkeys()
         sys.exit(exit_code)
 
     def _initial_identify(self):
         """
-        Run identification immediately on startup
-        in case music is already playing.
+        Identify on startup in case music is already playing.
+        Runs immediately without waiting for detector.
         """
         try:
             time.sleep(1)  # let UI settle first
@@ -378,6 +492,5 @@ class LyricsLayApp:
 
 
 if __name__ == "__main__":
-    import config
     lyricslay = LyricsLayApp()
     lyricslay.run()
