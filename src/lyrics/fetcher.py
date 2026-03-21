@@ -36,15 +36,15 @@ async def _fetch_all(title: str, artist: str) -> list | None:
     # priority: synced (lrclib) > plain (ovh) > plain (genius)
     if isinstance(lrclib_result, list) and lrclib_result:
         print("[Fetcher] Found synced lyrics from LRCLIB ✅")
-        return lrclib_result
+        return _apply_romanization(lrclib_result)
 
     if isinstance(ovh_result, list) and ovh_result:
         print("[Fetcher] Found plain lyrics from Lyrics.ovh ✅")
-        return ovh_result
+        return _apply_romanization(ovh_result)
 
     if isinstance(genius_result, list) and genius_result:
         print("[Fetcher] Found plain lyrics from Genius ✅")
-        return genius_result
+        return _apply_romanization(genius_result)
 
     print("[Fetcher] No lyrics found in any source.")
     return None
@@ -205,3 +205,16 @@ def _plain_to_timed(text: str) -> list:
     """
     lines = [l.strip() for l in text.split("\n") if l.strip()]
     return [{"t": 0.0, "line": line} for line in lines]
+
+def _apply_romanization(lyrics: list) -> list:
+    """Apply romanization to lyrics if enabled in settings."""
+    from src.core.settings import get as get_setting
+    if not get_setting("romanize_lyrics"):
+        return lyrics
+
+    from src.lyrics.romanizer import romanize
+    print("[Fetcher] Applying romanization...")
+    return [
+        {"t": entry["t"], "line": romanize(entry["line"])}
+        for entry in lyrics
+    ]

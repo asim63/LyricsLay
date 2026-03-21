@@ -157,6 +157,59 @@ class SettingsWindow(QDialog):
 
         layout.addLayout(btn_row)
 
+        # ── romanization toggle ───────────────────────────────────────
+        rom_divider = QFrame()
+        rom_divider.setFrameShape(QFrame.Shape.HLine)
+        rom_divider.setStyleSheet("background-color: #45475a;")
+        rom_divider.setFixedHeight(1)
+        layout.addWidget(rom_divider)
+
+        rom_row = QHBoxLayout()
+
+        rom_label = QLabel("Romanize lyrics")
+        rom_label.setFont(QFont("Arial", 12))
+        rom_label.setStyleSheet("color: #a6adc8;")
+        rom_row.addWidget(rom_label)
+
+        rom_row.addStretch()
+
+        self.rom_toggle = QPushButton(
+            "ON" if settings.get("romanize_lyrics") else "OFF"
+        )
+        self.rom_toggle.setFixedSize(60, 30)
+        self.rom_toggle.setCheckable(True)
+        self.rom_toggle.setChecked(
+            settings.get("romanize_lyrics", False)
+        )
+        self.rom_toggle.setStyleSheet("""
+            QPushButton {
+                background-color: #45475a;
+                color: #cdd6f4;
+                border-radius: 6px;
+                font-size: 12px;
+                font-weight: bold;
+            }
+            QPushButton:checked {
+                background-color: #89b4fa;
+                color: #1e1e2e;
+            }
+        """)
+        self.rom_toggle.clicked.connect(
+            lambda: self.rom_toggle.setText(
+                "ON" if self.rom_toggle.isChecked() else "OFF"
+            )
+        )
+        rom_row.addWidget(self.rom_toggle)
+        layout.addLayout(rom_row)
+
+        rom_desc = QLabel(
+            "Convert Japanese/Korean/Hindi to phonetic Latin"
+        )
+        rom_desc.setFont(QFont("Arial", 10))
+        rom_desc.setStyleSheet("color: #6c7086;")
+        layout.addWidget(rom_desc)
+        
+        
     def _save(self):
         """Save both hotkeys."""
         qt_toggle = self.key_edit.keySequence().toString()
@@ -191,6 +244,7 @@ class SettingsWindow(QDialog):
         # convert Qt format back to pynput format
         pynput_hotkey = self._qt_to_pynput(qt_sequence)
         settings.set("hotkey", pynput_hotkey)
+        settings.set("romanize_lyrics", self.rom_toggle.isChecked())
 
         # notify the app to re-register the hotkey
         if self.on_hotkey_changed:

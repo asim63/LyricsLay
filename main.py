@@ -375,6 +375,14 @@ class LyricsLayApp:
                 LYRICS_MS
             )
 
+            # determine cache key based on romanization setting
+            from src.core.settings import get as get_setting
+            cache_key = (
+                f"{shazam_id}_rom"
+                if get_setting("romanize_lyrics")
+                else shazam_id
+            )
+
             # same song — just resync position
             if shazam_id == self.current_song_id:
                 print("[Identifier] Same song — resyncing.")
@@ -388,9 +396,9 @@ class LyricsLayApp:
 
             lyrics_start = time.time()
 
-            # load from cache — instant
-            if is_cached(shazam_id):
-                cached       = get_cached_song(shazam_id)
+            # load from cache using cache_key
+            if is_cached(cache_key):
+                cached       = get_cached_song(cache_key)
                 cache_offset = offset_ms + SAMPLE_MS + shazam_delay
                 print(f"[Identifier] From cache! ✅ "
                       f"Offset: {cache_offset:.0f}ms")
@@ -407,27 +415,24 @@ class LyricsLayApp:
                 0, adjusted_offset + actual_lyrics_ms - LYRICS_MS
             )
 
-            # only show and cache synced lyrics
             synced = lyrics and any(
                 entry["t"] > 0 for entry in lyrics
             )
 
             if lyrics and synced:
-                cache_song(shazam_id, title, artist, lyrics)
+                cache_song(cache_key, title, artist, lyrics)
                 self.bridge.show_lyrics.emit(lyrics, False, final_offset)
                 print(f"[Identifier] Done. Offset: {final_offset:.0f}ms")
 
             elif lyrics and not synced:
-                # unsynced — show with auto-scroll, don't cache
                 print("[Identifier] Unsynced lyrics — auto-scroll mode.")
                 self.bridge.show_lyrics.emit(lyrics, False, final_offset)
 
             else:
-                # no lyrics at all
-                cache_song(shazam_id, title, artist, [])
+                cache_song(cache_key, title, artist, [])
                 print("[Identifier] No lyrics found.")
                 self.bridge.show_no_lyrics.emit()
-
+                
         except Exception as e:
             print(f"[Identifier] Error: {e}")
             self.bridge.show_no_lyrics.emit()
@@ -437,14 +442,20 @@ class LyricsLayApp:
 
     def _resync_position(self, shazam_id: str, offset_ms: float):
         """Resyncs lyrics to correct position after skip."""
-        if is_cached(shazam_id):
-            cached = get_cached_song(shazam_id)
+        from src.core.settings import get as get_setting
+        cache_key = (
+            f"{shazam_id}_rom"
+            if get_setting("romanize_lyrics")
+            else shazam_id
+        )
+
+        if is_cached(cache_key):
+            cached = get_cached_song(cache_key)
             lyrics = cached.get("lyrics", [])
             if lyrics:
                 print(f"[Identifier] Resyncing at "
                       f"{offset_ms/1000:.1f}s")
                 self.bridge.show_lyrics.emit(lyrics, False, offset_ms)
-
     # ─── Run ─────────────────────────────────────────────────────────
 
     def run(self):

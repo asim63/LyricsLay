@@ -7,3 +7,6 @@ beautifulsoup4
 pynput
 pillow
 faster-whisper
+pykakasi
+hangul-romanize
+indic-transliteration
