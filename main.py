@@ -62,6 +62,8 @@ class LyricsLayApp:
 
         self._connect_signals()
         self._register_hotkeys()
+        # wire reidentify button on overlay
+        self.overlay.reidentify_button.on_click = self._on_force_reidentify
 
     # ─── Signals ─────────────────────────────────────────────────────
 
@@ -71,7 +73,7 @@ class LyricsLayApp:
         self.bridge.show_no_lyrics.connect(self.overlay.set_no_lyrics)
         self.bridge.toggle_overlay.connect(self._toggle)
         self.bridge.force_reidentify.connect(self._on_force_reidentify)
-
+    
         self.overlay.toggle_requested.connect(self._toggle)
         self.tray.toggle_action.triggered.disconnect()
         self.tray.toggle_action.triggered.connect(self._toggle)

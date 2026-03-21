@@ -65,7 +65,6 @@ class SystemTray(QSystemTrayIcon):
     # ─── Menu ────────────────────────────────────────────────────────
 
     def _setup_menu(self):
-        """Build the right-click menu."""
         menu = QMenu()
         menu.setStyleSheet("""
             QMenu {
@@ -95,15 +94,11 @@ class SystemTray(QSystemTrayIcon):
         self.toggle_action = menu.addAction("Hide lyrics")
         self.toggle_action.triggered.connect(self._toggle_overlay)
 
-        # close overlay (same as toggle but always hides)
-        close_action = menu.addAction("Close overlay")
-        close_action.triggered.connect(self._close_overlay)
-
         menu.addSeparator()
 
-        # restart
-        restart_action = menu.addAction("Restart LyricsLay")
-        restart_action.triggered.connect(self._restart)
+        # romanization toggle
+        self.rom_action = menu.addAction("Romanization: OFF")
+        self.rom_action.triggered.connect(self._toggle_romanization)
 
         menu.addSeparator()
 
@@ -123,6 +118,9 @@ class SystemTray(QSystemTrayIcon):
 
         self.setContextMenu(menu)
         self.activated.connect(self._on_activated)
+
+        # sync romanization label on open
+        self._update_rom_label()
     # ─── Actions ─────────────────────────────────────────────────────
 
     def _toggle_overlay(self):
@@ -208,4 +206,41 @@ class SystemTray(QSystemTrayIcon):
         self.overlay.move((screen_w - w) // 2, 40)
         self.overlay.grip_handle.reposition()
         self.overlay.resize_handle.reposition()
+        print("[Tray] Position reset.")
+        
+    def _toggle_romanization(self):
+        """Toggle romanization on/off."""
+        from src.core import settings
+        current = settings.get("romanize_lyrics")
+        settings.set("romanize_lyrics", not current)
+        self._update_rom_label()
+        state = "ON" if not current else "OFF"
+        print(f"[Tray] Romanization: {state}")
+        self.showMessage(
+            "LyricsLay",
+            f"Romanization {state} — takes effect on next song",
+            QSystemTrayIcon.MessageIcon.Information,
+            2000
+        )
+
+    def _update_rom_label(self):
+        """Sync romanization menu label."""
+        from src.core import settings
+        state = settings.get("romanize_lyrics")
+        self.rom_action.setText(
+            f"Romanization: {'ON ✓' if state else 'OFF'}"
+        )
+    def _reset_position(self):
+        """Reset overlay to top center."""
+        from src.core import settings
+        from PyQt6.QtWidgets import QApplication
+        settings.set("overlay_position", None)
+        screen   = QApplication.primaryScreen()
+        screen_w = screen.geometry().width()
+        w        = self.overlay.width()
+        self.overlay.move((screen_w - w) // 2, 40)
+        for h in ['close_handle', 'grip_handle', 'resize_handle',
+                  'restart_button', 'reidentify_button']:
+            if hasattr(self.overlay, h):
+                getattr(self.overlay, h).reposition()
         print("[Tray] Position reset.")

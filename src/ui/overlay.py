@@ -10,7 +10,143 @@ from PyQt6.QtGui  import QFont
 from src.core     import settings
 import config
 
+class RestartButton(QWidget):
+    """
+    Separate always-interactive window — restart button.
+    Sits on the left side of the overlay.
+    """
+    def __init__(self, overlay):
+        super().__init__()
+        self.overlay = overlay
 
+        self.setWindowFlags(
+            Qt.WindowType.FramelessWindowHint  |
+            Qt.WindowType.WindowStaysOnTopHint |
+            Qt.WindowType.Tool
+        )
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        self.setFixedSize(24, 24)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setToolTip("Restart LyricsLay")
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+
+        label = QLabel("↺")
+        label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        label.setFont(QFont("Arial", 13))
+        label.setStyleSheet("""
+            color: rgba(255,255,255,140);
+            background: rgba(0,0,0,0.50);
+            border-radius: 8px 8px 0px 0px;
+            padding: 2px;
+        """)
+        layout.addWidget(label)
+
+    def reposition(self):
+        pos = self.overlay.pos()
+        self.move(
+            pos.x() - self.width() - 4,
+            pos.y()
+        )
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            import os, sys
+            print("[Overlay] Restarting...")
+            os.execv(sys.executable, [sys.executable] + sys.argv)
+
+
+class ReidentifyButton(QWidget):
+    """
+    Separate always-interactive window — force reidentify button.
+    Sits below restart button on the left side.
+    """
+    def __init__(self, overlay, on_click):
+        super().__init__()
+        self.overlay  = overlay
+        self.on_click = on_click
+
+        self.setWindowFlags(
+            Qt.WindowType.FramelessWindowHint  |
+            Qt.WindowType.WindowStaysOnTopHint |
+            Qt.WindowType.Tool
+        )
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        self.setFixedSize(24, 24)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setToolTip("Force reidentify (Ctrl+Shift+K)")
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+
+        label = QLabel("⟳")
+        label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        label.setFont(QFont("Arial", 13))
+        label.setStyleSheet("""
+            color: rgba(255,255,255,140);
+            background: rgba(0,0,0,0.50);
+            border-radius: 0px 0px 8px 8px;
+            padding: 2px;
+        """)
+        layout.addWidget(label)
+
+    def reposition(self):
+        pos = self.overlay.pos()
+        self.move(
+            pos.x() - self.width() - 4,
+            pos.y() + self.overlay.height() - self.height()
+        )
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            if self.on_click:
+                self.on_click()
+
+
+class CloseButton(QWidget):
+    """
+    Separate always-interactive window — close overlay button.
+    Sits at the top of the right side.
+    """
+    def __init__(self, overlay):
+        super().__init__()
+        self.overlay = overlay
+
+        self.setWindowFlags(
+            Qt.WindowType.FramelessWindowHint  |
+            Qt.WindowType.WindowStaysOnTopHint |
+            Qt.WindowType.Tool
+        )
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        self.setFixedSize(24, 24)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setToolTip("Hide overlay")
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+
+        label = QLabel("×")
+        label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        label.setFont(QFont("Arial", 14))
+        label.setStyleSheet("""
+            color: rgba(255,255,255,140);
+            background: rgba(0,0,0,0.50);
+            border-radius: 8px 8px 0px 0px;
+            padding: 2px;
+        """)
+        layout.addWidget(label)
+
+    def reposition(self):
+        pos = self.overlay.pos()
+        self.move(
+            pos.x() + self.overlay.width() + 4,
+            pos.y()
+        )
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.overlay.toggle()
 class GripHandle(QWidget):
     """
     Separate always-interactive window for dragging.
@@ -181,9 +317,15 @@ class LyricsOverlay(QWidget):
         self._setup_timer()
         self._position_window()
 
-        # separate always-interactive windows for controls
+        # right side handles
+        self.close_handle  = CloseButton(self)
         self.grip_handle   = GripHandle(self)
         self.resize_handle = ResizeHandle(self)
+
+        # left side buttons — need callbacks from main.py
+        self.restart_button    = RestartButton(self)
+        self.reidentify_button = ReidentifyButton(self, on_click=None)
+        # on_click set by main.py after init
         
         self._anim_timer              = None
         self._anim_targets            = {}
@@ -354,15 +496,24 @@ class LyricsOverlay(QWidget):
 
     def show(self):
         super().show()
+        self.close_handle.reposition()
+        self.close_handle.show()
         self.grip_handle.reposition()
         self.grip_handle.show()
         self.resize_handle.reposition()
         self.resize_handle.show()
+        self.restart_button.reposition()
+        self.restart_button.show()
+        self.reidentify_button.reposition()
+        self.reidentify_button.show()
 
     def hide(self):
         super().hide()
+        self.close_handle.hide()
         self.grip_handle.hide()
         self.resize_handle.hide()
+        self.restart_button.hide()
+        self.reidentify_button.hide()
 
     def toggle(self):
         if self.is_visible:
@@ -374,18 +525,17 @@ class LyricsOverlay(QWidget):
 
     def moveEvent(self, event):
         super().moveEvent(event)
-        if hasattr(self, 'grip_handle'):
-            self.grip_handle.reposition()
-        if hasattr(self, 'resize_handle'):
-            self.resize_handle.reposition()
+        for h in ['close_handle', 'grip_handle', 'resize_handle',
+                  'restart_button', 'reidentify_button']:
+            if hasattr(self, h):
+                getattr(self, h).reposition()
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
-        if hasattr(self, 'grip_handle'):
-            self.grip_handle.reposition()
-        if hasattr(self, 'resize_handle'):
-            self.resize_handle.reposition()
-
+        for h in ['close_handle', 'grip_handle', 'resize_handle',
+                  'restart_button', 'reidentify_button']:
+            if hasattr(self, h):
+                getattr(self, h).reposition()
     # ─── Lyrics control ──────────────────────────────────────────────
 
     def load_lyrics(self, lyrics: list,

@@ -94,7 +94,7 @@ def _romanize_hindi(text: str) -> str:
         return transliterate(
             text,
             sanscript.DEVANAGARI,
-            sanscript.HK     # IAST = standard Latin for Indian scripts and HK = Harvard-Kyoto, more ASCII-friendly
+            sanscript.IAST    # IAST = standard Latin for Indian scripts and HK = Harvard-Kyoto, more ASCII-friendly
         )
     except ImportError:
         print("[Romanizer] indic-transliteration not installed — pip install indic-transliteration")
