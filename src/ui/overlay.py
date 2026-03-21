@@ -173,6 +173,8 @@ class LyricsOverlay(QWidget):
         self.drag_position   = QPoint()
         self.is_visible      = True
         self.is_caption_mode = False
+        self._frozen_seconds   = 0.0
+        self._showing_no_audio = False
 
         self._setup_window()
         self._setup_ui()
@@ -393,40 +395,36 @@ class LyricsOverlay(QWidget):
         self.timer.stop()
         self.lyrics          = lyrics
         self.current_index   = 0
-        self.is_caption_mode = caption_mode
+        self.is_caption_mode = False  # unused for now
 
+        # no lyrics at all
         if not lyrics:
-            if caption_mode:
-                self.caption_badge.show()
-                self.past_label.setText("")
-                self.current_label.setText("Listening...")
-                self.next_label.setText("")
+            self.caption_badge.hide()
             return
-
-        self.caption_badge.hide()
 
         # check if synced
         synced = any(entry["t"] > 0 for entry in lyrics)
 
         if synced:
             self.playback_time = start_ms / 1000.0
+            self.caption_badge.hide()
         else:
-            # unsynced — start from 0, calculate scroll pace
+            # unsynced — show notice, calculate scroll pace
             self.playback_time = 0.0
-            # estimate song duration from start_ms if available
-            # otherwise assume 210 seconds (3.5 min average)
+            self.caption_badge.setText("lyrics unsynced · timing may be off")
+            self.caption_badge.show()
+
             estimated_duration = max(
-                start_ms / 1000.0* 2,  # double current offset
-                210.0                   # minimum 3.5 min estimate
+                start_ms / 1000.0 * 2,
+                210.0
             )
             self._unsynced_secs_per_line = (
                 estimated_duration / max(len(lyrics), 1)
             )
-            print(f"[Overlay] Unsynced — estimated "
-                  f"{self._unsynced_secs_per_line:.1f}s per line "
-                  f"({len(lyrics)} lines)")
+            print(f"[Overlay] Unsynced — "
+                  f"{self._unsynced_secs_per_line:.1f}s per line")
 
-        # find starting index
+        # find starting index for synced lyrics
         start_index = 0
         if synced:
             for i, entry in enumerate(lyrics):
@@ -501,6 +499,24 @@ class LyricsOverlay(QWidget):
 
         if new_index != self.current_index:
             self.current_index = new_index
+            self._frozen_seconds = 0 
+            self._update_display(new_index)
+        else:
+            # same line — count frozen time
+            self._frozen_seconds = getattr(self, '_frozen_seconds', 0) + 0.1
+
+            # if frozen for more than 15 seconds — show no audio message
+            if self._frozen_seconds > 15:
+                self.past_label.setText("")
+                self.current_label.setText("No audio detected")
+                self.next_label.setText("")
+                self._showing_no_audio = True
+            
+        # if was showing no audio but now moving again — restore
+        if getattr(self, '_showing_no_audio', False) and \
+                new_index != self.current_index:
+            self._showing_no_audio = False
+            self._frozen_seconds   = 0
             self._update_display(new_index)
             
     def _update_display(self, index: int):
@@ -582,13 +598,24 @@ class LyricsOverlay(QWidget):
         self.lyrics = []
 
     def set_no_lyrics(self):
-        """Show message when no lyrics found."""
+        """Show message when no lyrics found for current song."""
         self.timer.stop()
         self.past_label.setText("")
         self.current_label.setText("No lyrics available")
         self.next_label.setText("Press Ctrl+Shift+K to retry")
+        self.caption_badge.hide()
         self.lyrics = []
-
+    
+    def set_paused(self):
+        """Show message when music is paused."""
+        self.timer.stop()
+        self.past_label.setText("")
+        self.current_label.setText("No audio detected")
+        self.next_label.setText("")
+        self.caption_badge.hide()
+        # deliberately NOT clearing self.lyrics
+        # so position is remembered when music resumes# don't clear lyrics — resume will reload them
+        
     def clear(self):
         self.timer.stop()
         self.past_label.setText("")

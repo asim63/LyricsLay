@@ -58,6 +58,7 @@ class LyricsLayApp:
         self.running               = True
         self.identifying           = False
         self.force_reidentify_flag = False
+        self._shazam_lock          = threading.Lock()
 
         self._connect_signals()
         self._register_hotkeys()
@@ -157,12 +158,9 @@ class LyricsLayApp:
                     time.sleep(1)
                     continue
 
-                # record 4s audio — used for both fingerprint
-                # and position check (no double recording)
                 audio       = record_audio(duration=4)
                 fingerprint = self._quick_fingerprint(audio)
 
-                # rolling average of last 4 fingerprints
                 fp_history.append(fingerprint)
                 if len(fp_history) > 4:
                     fp_history.pop(0)
@@ -194,7 +192,7 @@ class LyricsLayApp:
 
                 else:
                     # same song — check position every cycle
-                    if self.current_song_id:
+                    if self.current_song_id and not self.identifying:
                         threading.Thread(
                             target=self._check_position_jump,
                             args=(audio,),
@@ -213,9 +211,19 @@ class LyricsLayApp:
         Reuses already-recorded audio — no extra recording.
         Resyncs if position differs by more than 5 seconds.
         """
+        if not self.current_song_id or self.identifying:
+            return
+
+        if not self._shazam_lock.acquire(blocking=False):
+            print("[Detector] Shazam busy — skipping.")
+            return
+
         try:
             song = recognise_song(audio)
             if not song:
+                return
+
+            if not self.current_song_id:
                 return
 
             if song["shazam_id"] != self.current_song_id:
@@ -251,11 +259,14 @@ class LyricsLayApp:
 
         except Exception as e:
             print(f"[Detector] Position check error: {e}")
+        finally:
+            self._shazam_lock.release()
 
     def _quick_fingerprint(self, audio: np.ndarray) -> np.ndarray:
         """
         Stable spectral fingerprint.
         Uses ZCR, spectral centroid, rolloff and RMS.
+        Consistent within same song even across quiet/loud sections.
         """
         if len(audio) == 0:
             return np.zeros(4)
@@ -336,7 +347,8 @@ class LyricsLayApp:
             if len(audio) < 16000 * 4:
                 audio = record_audio(duration=5)
 
-            song = recognise_song(audio)
+            with self._shazam_lock:
+                song = recognise_song(audio)
 
             if song is None:
                 print("[Identifier] No match.")
@@ -377,7 +389,7 @@ class LyricsLayApp:
 
             lyrics_start = time.time()
 
-            # load from cache — instant, no lyrics fetch delay
+            # load from cache — instant
             if is_cached(shazam_id):
                 cached       = get_cached_song(shazam_id)
                 cache_offset = offset_ms + SAMPLE_MS + shazam_delay
