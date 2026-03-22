@@ -1,18 +1,15 @@
-from src.core.settings import get
-from src.core.cache import is_cached, load_cache
+from src.core.cache import load_cache, save_cache
 
-# check romanization setting
-print(f"Romanize ON: {get('romanize_lyrics')}")
-print()
-
-# check all cached songs
 cache = load_cache()
-print(f"Total cached: {len(cache)}")
-print()
+# find and delete Smooth Operator
+to_del = [sid for sid, d in cache.items() 
+          if 'smooth' in d['title'].lower()]
+for sid in to_del:
+    print(f"Deleting: {cache[sid]['title']}")
+    del cache[sid]
 
-for sid, data in cache.items():
-    has_rom = is_cached(f"{sid}_rom")
-    print(f"{data['title']} by {data['artist']}")
-    print(f"  Original ({sid}): ✅")
-    print(f"  Romanized ({sid}_rom): {'✅' if has_rom else '❌ not yet'}")
-    print()
+with open(r"C:\Users\Asim\.lyricslay\cache.json", 
+          "w", encoding="utf-8") as f:
+    import json
+    json.dump(cache, f, ensure_ascii=False, indent=2)
+print("Done")

@@ -32,7 +32,7 @@ class RestartButton(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
 
-        label = QLabel("↺")
+        label = QLabel("R")
         label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         label.setFont(QFont("Arial", 13))
         label.setStyleSheet("""
@@ -86,7 +86,7 @@ class ReidentifyButton(QWidget):
         label.setStyleSheet("""
             color: rgba(255,255,255,140);
             background: rgba(0,0,0,0.50);
-            border-radius: 0px 0px 8px 8px;
+            border-radius: 8px 8px 0px 0px;
             padding: 2px;
         """)
         layout.addWidget(label)
@@ -184,11 +184,11 @@ class GripHandle(QWidget):
         layout.addWidget(label)
 
     def reposition(self):
-        """Sit just to the right of the overlay, top half."""
+        """Sit just to the right of the overlay, vertically centered."""
         pos = self.overlay.pos()
         self.move(
             pos.x() + self.overlay.width() + 4,
-            pos.y()
+            pos.y() + (self.overlay.height() - self.height()) // 2
         )
 
     def mousePressEvent(self, event):
