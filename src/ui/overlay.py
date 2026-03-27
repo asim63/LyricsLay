@@ -633,44 +633,34 @@ class LyricsOverlay(QWidget):
         synced = any(entry["t"] > 0 for entry in self.lyrics)
 
         if synced:
-            # synced mode — find line by timestamp
+            # binary search instead of scanning all lines
+            # much faster for long lyrics
             new_index = self.current_index
-            for i, entry in enumerate(self.lyrics):
-                if entry["t"] <= self.playback_time:
+            for i in range(self.current_index, len(self.lyrics)):
+                if self.lyrics[i]["t"] <= self.playback_time:
                     new_index = i
+                else:
+                    break
         else:
-            # unsynced — estimate pace from line count
-            # assume average song duration of 210 seconds
-            secs_per_line = self._unsynced_secs_per_line
-            new_index     = min(
-                int(self.playback_time / secs_per_line),
+            new_index = min(
+                int(self.playback_time / self._unsynced_secs_per_line),
                 len(self.lyrics) - 1
             )
 
         if new_index != self.current_index:
             self.current_index = new_index
-            self._frozen_seconds = 0 
+            self._frozen_seconds   = 0.0
+            self._showing_no_audio = False
             self._update_display(new_index)
         else:
-            # same line — count frozen time
-            self._frozen_seconds = getattr(self, '_frozen_seconds', 0) + 0.1
+            self._frozen_seconds += 0.1
 
-            # if frozen for more than 15 seconds — show no audio message
-            if self._frozen_seconds > 15:
-                self.past_label.setText("")
-                self.current_label.setText("No audio detected")
-                self.next_label.setText("")
-                self._showing_no_audio = True
-            
-        # if was showing no audio but now moving again — restore
-        if getattr(self, '_showing_no_audio', False) and \
-                new_index != self.current_index:
-            self._showing_no_audio = False
-            self._frozen_seconds   = 0
-            self._update_display(new_index)
-            
     def _update_display(self, index: int):
-        """Crossfade animation — smooth but never laggy."""
+        """
+        Updates labels — skips animation for fast lyrics.
+        Detects line speed and switches between
+        instant swap (fast) and crossfade (normal).
+        """
         total = len(self.lyrics)
         if total == 0:
             return
@@ -680,53 +670,80 @@ class LyricsOverlay(QWidget):
         next_text    = (self.lyrics[index + 1]["line"]
                         if index < total - 1 else "")
 
-        # cancel existing animation
-        if hasattr(self, '_anim_timer') and self._anim_timer \
-                and self._anim_timer.isActive():
+        # detect how fast lines are changing
+        # if next line is within 1.5 seconds — fast mode, skip animation
+        fast_mode = False
+        if index < total - 1:
+            time_to_next = (
+                self.lyrics[index + 1]["t"] - self.lyrics[index]["t"]
+            )
+            fast_mode = time_to_next < 1.5
+
+        if fast_mode:
+            # instant swap — no animation lag on fast songs
+            if hasattr(self, '_anim_timer') and \
+                    self._anim_timer and self._anim_timer.isActive():
+                self._anim_timer.stop()
+
+            self.past_label.setText(past_text)
+            self.current_label.setText(current_text)
+            self.next_label.setText(next_text)
+            self._restore_label_style(self.past_label,    90)
+            self._restore_label_style(self.current_label, 255)
+            self._restore_label_style(self.next_label,    90)
+            return
+
+        # normal mode — smooth crossfade animation
+        if hasattr(self, '_anim_timer') and \
+                self._anim_timer and self._anim_timer.isActive():
             self._anim_timer.stop()
 
-        STEPS    = 6   # very few steps — snappy not laggy
-        INTERVAL = 20  # 20ms each = 120ms total — barely noticeable
-        step     = [0]
-
-        # store target texts
-        targets = {
+        self._anim_targets = {
             self.past_label:    (past_text,    90),
             self.current_label: (current_text, 255),
             self.next_label:    (next_text,    90),
         }
 
+        STEPS    = 8
+        INTERVAL = 20
+        step     = [0]
+        swapped  = [False]
+
         def tick():
             step[0] += 1
-            t = step[0] / STEPS
+            half = STEPS // 2
 
-            # fade out old, fade in new simultaneously
-            for label, (new_text, target_alpha) in targets.items():
-                is_current = (label is self.current_label)
-                bold       = "font-weight: bold;" if is_current else ""
+            for label, (new_text, target_alpha) in \
+                    self._anim_targets.items():
+                is_curr = (label is self.current_label)
+                bold    = "font-weight: bold;" if is_curr else ""
 
-                if step[0] <= STEPS // 2:
-                    # first half — fade out
-                    alpha = int(target_alpha * (1 - t * 2))
+                if step[0] <= half:
+                    progress = step[0] / half
+                    alpha    = int(target_alpha * (1.0 - progress))
                     label.setStyleSheet(
                         f"color: rgba(255,255,255,{max(0,alpha)});"
                         f"background: transparent; {bold}"
                     )
                 else:
-                    # second half — swap text and fade in
-                    if step[0] == STEPS // 2 + 1:
-                        label.setText(new_text)
-                    progress = (t - 0.5) * 2
+                    if not swapped[0]:
+                        for lbl, (txt, _) in \
+                                self._anim_targets.items():
+                            lbl.setText(txt)
+                        swapped[0] = True
+
+                    progress = (step[0] - half) / half
                     alpha    = int(target_alpha * progress)
                     label.setStyleSheet(
-                        f"color: rgba(255,255,255,{min(target_alpha,alpha)});"
+                        f"color: rgba(255,255,255,"
+                        f"{min(target_alpha, alpha)});"
                         f"background: transparent; {bold}"
                     )
 
             if step[0] >= STEPS:
                 self._anim_timer.stop()
-                # snap to clean final state
-                for label, (new_text, alpha) in targets.items():
+                for label, (new_text, alpha) in \
+                        self._anim_targets.items():
                     is_curr = (label is self.current_label)
                     bold    = "font-weight: bold;" if is_curr else ""
                     label.setText(new_text)
@@ -739,7 +756,7 @@ class LyricsOverlay(QWidget):
         self._anim_timer.setInterval(INTERVAL)
         self._anim_timer.timeout.connect(tick)
         self._anim_timer.start()
-
+        
     def set_loading(self):
         self.timer.stop()
         self.past_label.setText("")
