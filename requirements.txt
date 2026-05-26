@@ -1,12 +1,11 @@
-pyqt6
+PyQt6
 shazamio
 sounddevice
 numpy
 requests
 beautifulsoup4
 pynput
-pillow
-faster-whisper
 pykakasi
 hangul-romanize
 indic-transliteration
+pyaudiowpatch
