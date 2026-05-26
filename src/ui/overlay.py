@@ -73,18 +73,17 @@ class _Handle(QWidget):
         if hovered:
             self._lbl.setStyleSheet(
                 "color: rgba(255,255,255,230);"
-                "background: rgba(255,255,255,20);"
-                "border: 1px solid rgba(255,255,255,30);"
+                "background: rgba(0,0,0,160);"
+                "border: 1px solid rgba(255,255,255,40);"
                 "border-radius: 6px;"
             )
         else:
             self._lbl.setStyleSheet(
-                "color: rgba(255,255,255,110);"
-                "background: rgba(255,255,255,8);"
-                "border: 1px solid rgba(255,255,255,14);"
+                "color: rgba(255,255,255,160);"
+                "background: rgba(0,0,0,120);"
+                "border: 1px solid rgba(255,255,255,20);"
                 "border-radius: 6px;"
             )
-
     def enterEvent(self, e):   self._set_style(True)
     def leaveEvent(self, e):   self._set_style(False)
     def reposition(self):      pass
