@@ -15,7 +15,12 @@ from src.lyrics.fetcher  import fetch_lyrics
 from src.ui.overlay      import LyricsOverlay
 from src.ui.tray         import SystemTray
 import config
+import ctypes
 
+# ── Single instance lock ──────────────────────────────────────────────────────
+_mutex = ctypes.windll.kernel32.CreateMutexW(None, False, "LyricsLaySingleInstance")
+if ctypes.windll.kernel32.GetLastError() == 183:  # ERROR_ALREADY_EXISTS
+    sys.exit(0)
 
 class SignalBridge(QObject):
     """
