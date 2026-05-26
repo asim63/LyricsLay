@@ -2,7 +2,7 @@ import os
 
 # ─── Paths ────────────────────────────────────────────────────────────────────
 BASE_DIR   = os.path.dirname(os.path.abspath(__file__))
-CACHE_DIR  = os.path.join(os.path.expanduser("~"), ".lyricslay")
+CACHE_DIR  = os.path.join(os.environ.get("APPDATA", os.path.expanduser("~")), "LyricsLay")
 CACHE_FILE = os.path.join(CACHE_DIR, "cache.json")
 
 os.makedirs(CACHE_DIR, exist_ok=True)
