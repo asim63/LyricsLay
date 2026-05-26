@@ -6,7 +6,7 @@ LyricsLay is a lightweight desktop application that automatically detects the mu
 
 The goal is simple — no browser extensions, no player integrations, no manual searching, no switching windows. Just play music and LyricsLay handles the rest.
 
-![LyricsLay over YouTube Music](screenshots/screenshot1.png)
+![LyricsLay over YouTube Music](screenshots/1.png)
 
 ---
 
@@ -22,7 +22,7 @@ The goal is simple — no browser extensions, no player integrations, no manual 
 - Local lyrics caching — repeat songs load instantly
 - Romanization support for Japanese and Korean lyrics
 
-![LyricsLay over any app](screenshots/screenshot2.png)
+![LyricsLay over any app](screenshots/2.png)
 
 ---
 
