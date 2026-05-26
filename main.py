@@ -14,6 +14,7 @@ from src.core.cache      import is_cached, get_cached_song, cache_song
 from src.lyrics.fetcher  import fetch_lyrics
 from src.ui.overlay      import LyricsOverlay
 from src.ui.tray         import SystemTray
+from src.core.settings import get as get_setting
 import config
 import ctypes
 
@@ -343,6 +344,15 @@ class LyricsLayApp:
         """
         Full pipeline: Audio → Shazam → Lyrics → Overlay.
         Compensates for recording + API delay in sync offset.
+
+        Cache logic:
+        - base_key = shazam_id           (plain lyrics)
+        - rom_key  = shazam_id_rom       (romanized lyrics)
+        - If romanization ON  and rom_key  cached → load rom_key
+        - If romanization ON  and base_key cached → romanize on the fly, cache rom_key
+        - If romanization OFF and base_key cached → load base_key
+        - If romanization OFF and rom_key  cached → load rom_key (better than refetch)
+        - If nothing cached → fetch fresh, cache both base and rom versions
         """
         self.identifying = True
         self.bridge.show_loading.emit()
@@ -382,13 +392,10 @@ class LyricsLayApp:
                 LYRICS_MS
             )
 
-            # determine cache key based on romanization setting
-            from src.core.settings import get as get_setting
-            cache_key = (
-                f"{shazam_id}_rom"
-                if get_setting("romanize_lyrics")
-                else shazam_id
-            )
+            romanize   = get_setting("romanize_lyrics")
+            base_key   = shazam_id
+            rom_key    = f"{shazam_id}_rom"
+            cache_offset = offset_ms + SAMPLE_MS + shazam_delay
 
             # same song — just resync position
             if shazam_id == self.current_song_id:
@@ -396,39 +403,70 @@ class LyricsLayApp:
                 self._resync_position(shazam_id, adjusted_offset)
                 return
 
-            # new song!
+            # new song
             self.current_song_id = shazam_id
             self.last_offset_ms  = adjusted_offset
             self.bridge.song_changed.emit(title, artist)
 
+            # ── cache lookup ──────────────────────────────────────────────────
+
+            if romanize:
+                if is_cached(rom_key):
+                    # best case — romanized version already cached
+                    cached = get_cached_song(rom_key)
+                    print(f"[Identifier] From cache (romanized) ✅  Offset: {cache_offset:.0f}ms")
+                    self.bridge.show_lyrics.emit(cached["lyrics"], False, cache_offset)
+                    return
+
+                if is_cached(base_key):
+                    # plain version cached — romanize on the fly and cache rom version
+                    cached = get_cached_song(base_key)
+                    print("[Identifier] Plain cache found — romanizing on the fly...")
+                    from src.lyrics.fetcher import _apply_romanization
+                    rom_lyrics = _apply_romanization(cached["lyrics"])
+                    cache_song(rom_key, title, artist, rom_lyrics)
+                    print(f"[Identifier] Romanized and cached ✅  Offset: {cache_offset:.0f}ms")
+                    self.bridge.show_lyrics.emit(rom_lyrics, False, cache_offset)
+                    return
+
+            else:
+                if is_cached(base_key):
+                    # plain version cached — load directly
+                    cached = get_cached_song(base_key)
+                    print(f"[Identifier] From cache ✅  Offset: {cache_offset:.0f}ms")
+                    self.bridge.show_lyrics.emit(cached["lyrics"], False, cache_offset)
+                    return
+
+                if is_cached(rom_key):
+                    # only romanized version exists — use it anyway, better than refetching
+                    cached = get_cached_song(rom_key)
+                    print(f"[Identifier] From cache (romanized fallback) ✅  Offset: {cache_offset:.0f}ms")
+                    self.bridge.show_lyrics.emit(cached["lyrics"], False, cache_offset)
+                    return
+
+            # ── nothing cached — fetch from APIs ─────────────────────────────
+
             lyrics_start = time.time()
-
-            # load from cache using cache_key
-            if is_cached(cache_key):
-                cached       = get_cached_song(cache_key)
-                cache_offset = offset_ms + SAMPLE_MS + shazam_delay
-                print(f"[Identifier] From cache! ✅ "
-                      f"Offset: {cache_offset:.0f}ms")
-                self.bridge.show_lyrics.emit(
-                    cached["lyrics"], False, cache_offset
-                )
-                return
-
-            # fetch from APIs
-            lyrics = fetch_lyrics(title, artist)
+            lyrics       = fetch_lyrics(title, artist)
 
             actual_lyrics_ms = (time.time() - lyrics_start) * 1000
-            final_offset     = max(
-                0, adjusted_offset + actual_lyrics_ms - LYRICS_MS
-            )
+            final_offset     = max(0, adjusted_offset + actual_lyrics_ms - LYRICS_MS)
 
-            synced = lyrics and any(
-                entry["t"] > 0 for entry in lyrics
-            )
+            synced = lyrics and any(entry["t"] > 0 for entry in lyrics)
 
             if lyrics and synced:
-                cache_song(cache_key, title, artist, lyrics)
-                self.bridge.show_lyrics.emit(lyrics, False, final_offset)
+                # always cache the plain version
+                cache_song(base_key, title, artist, lyrics)
+
+                if romanize:
+                    # also cache romanized version
+                    from src.lyrics.fetcher import _apply_romanization
+                    rom_lyrics = _apply_romanization(lyrics)
+                    cache_song(rom_key, title, artist, rom_lyrics)
+                    self.bridge.show_lyrics.emit(rom_lyrics, False, final_offset)
+                else:
+                    self.bridge.show_lyrics.emit(lyrics, False, final_offset)
+
                 print(f"[Identifier] Done. Offset: {final_offset:.0f}ms")
 
             elif lyrics and not synced:
@@ -436,17 +474,16 @@ class LyricsLayApp:
                 self.bridge.show_lyrics.emit(lyrics, False, final_offset)
 
             else:
-                cache_song(cache_key, title, artist, [])
+                cache_song(base_key, title, artist, [])
                 print("[Identifier] No lyrics found.")
                 self.bridge.show_no_lyrics.emit()
-                
+
         except Exception as e:
             print(f"[Identifier] Error: {e}")
             self.bridge.show_no_lyrics.emit()
 
         finally:
             self.identifying = False
-
     def _resync_position(self, shazam_id: str, offset_ms: float):
         """Resyncs lyrics to correct position after skip."""
         from src.core.settings import get as get_setting
