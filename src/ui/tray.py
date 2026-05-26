@@ -218,7 +218,7 @@ class SystemTray(QSystemTrayIcon):
         print(f"[Tray] Romanization: {state}")
         self.showMessage(
             "LyricsLay",
-            f"Romanization {state} — takes effect on next song",
+            f"Romanization {state} — wait shortly or reidentify song to update lyrics.",
             QSystemTrayIcon.MessageIcon.Information,
             2000
         )
