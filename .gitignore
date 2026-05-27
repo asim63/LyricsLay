@@ -8,6 +8,7 @@ __pycache__/
 
 # Distribution / packaging
 .Python
+installer_output/
 build/
 develop-eggs/
 dist/
@@ -31,7 +32,7 @@ MANIFEST
 #  before PyInstaller builds the exe, so as to inject date/other infos into it.
 *.manifest
 *.spec
-
+*.iss
 # Installer logs
 pip-log.txt
 pip-delete-this-directory.txt
