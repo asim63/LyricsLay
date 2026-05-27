@@ -1,27 +1,22 @@
 import sys
-from PyQt6.QtWidgets import (
-    QSystemTrayIcon, QMenu, QApplication
-)
-from PyQt6.QtGui  import QIcon, QPixmap, QColor, QPainter
+import os
+from PyQt6.QtWidgets import QSystemTrayIcon, QMenu, QApplication
+from PyQt6.QtGui import QIcon, QPixmap, QColor, QPainter
 from PyQt6.QtCore import Qt
-from src.core     import settings
+from src.core import settings
 
 
 class SystemTray(QSystemTrayIcon):
-    """
-    System tray icon — lives in the bottom-right taskbar.
-    Right-click shows the menu.
-    """
 
-    def __init__(self, overlay, app):
+    def __init__(self, overlay, app, reregister_hotkeys_fn=None):
         super().__init__()
-        self.overlay = overlay
-        self.app     = app
+        self.overlay               = overlay
+        self.app                   = app
+        self.reregister_hotkeys_fn = reregister_hotkeys_fn  # callback to main.py
 
         self._setup_icon()
         self._setup_menu()
 
-        # show notification on first launch
         self.showMessage(
             "LyricsLay",
             "Running in background. Press Ctrl+Shift+L to toggle lyrics.",
@@ -29,19 +24,17 @@ class SystemTray(QSystemTrayIcon):
             3000
         )
 
-    # ─── Icon ────────────────────────────────────────────────────────
+    # ─── icon ─────────────────────────────────────────────────────────────────
 
     def _setup_icon(self):
-        import os
-        icon_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 
-                                "..", "..", "assets", "icon.ico")
-        icon_path = os.path.normpath(icon_path)
-        
+        icon_path = os.path.normpath(
+            os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                         "..", "..", "assets", "icon.ico")
+        )
         if os.path.exists(icon_path):
             self.setIcon(QIcon(icon_path))
         else:
-            # fallback to drawn icon if file not found
-            pixmap  = QPixmap(32, 32)
+            pixmap = QPixmap(32, 32)
             pixmap.fill(Qt.GlobalColor.transparent)
             painter = QPainter(pixmap)
             painter.setRenderHint(QPainter.RenderHint.Antialiasing)
@@ -50,11 +43,11 @@ class SystemTray(QSystemTrayIcon):
             painter.drawEllipse(2, 2, 28, 28)
             painter.end()
             self.setIcon(QIcon(pixmap))
-        
+
         self.setToolTip("LyricsLay")
         self.setVisible(True)
 
-    # ─── Menu ────────────────────────────────────────────────────────
+    # ─── menu ─────────────────────────────────────────────────────────────────
 
     def _setup_menu(self):
         menu = QMenu()
@@ -82,55 +75,43 @@ class SystemTray(QSystemTrayIcon):
             }
         """)
 
-        # toggle lyrics
         self.toggle_action = menu.addAction("Hide lyrics")
         self.toggle_action.triggered.connect(self._toggle_overlay)
 
         menu.addSeparator()
 
-        # romanization toggle
         self.rom_action = menu.addAction("Romanization: OFF")
         self.rom_action.triggered.connect(self._toggle_romanization)
+        self._update_rom_label()
 
         menu.addSeparator()
 
-        # settings
-        settings_action = menu.addAction("Settings")
-        settings_action.triggered.connect(self._open_settings)
-
-        # reset position
-        reset_action = menu.addAction("Reset position")
-        reset_action.triggered.connect(self._reset_position)
+        menu.addAction("Settings").triggered.connect(self._open_settings)
+        menu.addAction("Reset position").triggered.connect(self._reset_position)
 
         menu.addSeparator()
 
-        # quit — always last
-        quit_action = menu.addAction("Quit LyricsLay")
-        quit_action.triggered.connect(self._quit)
+        menu.addAction("Quit LyricsLay").triggered.connect(self._quit)
 
         self.setContextMenu(menu)
         self.activated.connect(self._on_activated)
 
-        # sync romanization label on open
-        self._update_rom_label()
-    # ─── Actions ─────────────────────────────────────────────────────
+    # ─── actions ──────────────────────────────────────────────────────────────
 
     def _toggle_overlay(self):
-        """Show or hide the overlay."""
         self.overlay.toggle()
-        # update menu text to reflect current state
-        if self.overlay.is_visible:
-            self.toggle_action.setText("Hide lyrics")
-        else:
-            self.toggle_action.setText("Show lyrics")
+        self.update_toggle_text()
 
     def _on_activated(self, reason):
-        """Single click on tray icon — toggle overlay."""
         if reason == QSystemTrayIcon.ActivationReason.Trigger:
             self._toggle_overlay()
 
+    def update_toggle_text(self):
+        self.toggle_action.setText(
+            "Hide lyrics" if self.overlay.is_visible else "Show lyrics"
+        )
+
     def _open_settings(self):
-        """Open the settings window."""
         from src.ui.settings_window import SettingsWindow
         self.settings_win = SettingsWindow(
             on_hotkey_changed=self._on_hotkey_changed
@@ -138,71 +119,20 @@ class SystemTray(QSystemTrayIcon):
         self.settings_win.show()
 
     def _on_hotkey_changed(self, new_hotkey: str):
-        """Called when user saves a new hotkey in settings."""
+        """
+        Called when user saves settings.
+        Re-registers hotkeys immediately so changes take effect without restart.
+        """
         print(f"[Tray] Hotkey changed to: {new_hotkey}")
-        # main.py will handle re-registering the hotkey
-        # via the overlay's toggle_requested signal
-
-    def _quit(self):
-        """Quit the app cleanly."""
-        self.overlay.hide()
-        self.hide()
-        self.app.quit()
-
-    def update_toggle_text(self):
-        """Sync menu text with current overlay visibility."""
-        if self.overlay.is_visible:
-            self.toggle_action.setText("Hide lyrics")
+        # sync romanization label in case it was toggled in settings
+        self._update_rom_label()
+        # re-register hotkeys in main.py
+        if self.reregister_hotkeys_fn:
+            self.reregister_hotkeys_fn()
         else:
-            self.toggle_action.setText("Show lyrics")
-            
-    def _reset_position(self):
-        """Reset overlay to top center of screen."""
-        from src.core import settings
-        settings.set("overlay_position", None)
-        # reposition immediately
-        from PyQt6.QtWidgets import QApplication
-        screen   = QApplication.primaryScreen()
-        screen_w = screen.geometry().width()
-        w        = self.overlay.width()
-        self.overlay.move((screen_w - w) // 2, 40)
-        self.overlay.grip_handle.reposition()
-        self.overlay.resize_handle.reposition()
-        print("[Tray] Position reset to top center.")
-        
-    def _close_overlay(self):
-        """Always hides the overlay regardless of current state."""
-        if self.overlay.is_visible:
-            self.overlay.hide()
-            self.overlay.is_visible = False
-            self.toggle_action.setText("Show lyrics")
+            print("[Tray] Warning: no reregister_hotkeys_fn set — restart to apply hotkey changes")
 
-    def _restart(self):
-        """Restart the entire application."""
-        import sys
-        import os
-        print("[Tray] Restarting LyricsLay...")
-        self.overlay.hide()
-        self.hide()
-        # restart by re-executing the current process
-        os.execv(sys.executable, [sys.executable] + sys.argv)
-
-    def _reset_position(self):
-        """Reset overlay to top center of screen."""
-        from src.core import settings
-        from PyQt6.QtWidgets import QApplication
-        settings.set("overlay_position", None)
-        screen   = QApplication.primaryScreen()
-        screen_w = screen.geometry().width()
-        w        = self.overlay.width()
-        self.overlay.move((screen_w - w) // 2, 40)
-        self.overlay.grip_handle.reposition()
-        self.overlay.resize_handle.reposition()
-        print("[Tray] Position reset.")
-        
     def _toggle_romanization(self):
-        """Toggle romanization on/off."""
-        from src.core import settings
         current = settings.get("romanize_lyrics")
         settings.set("romanize_lyrics", not current)
         self._update_rom_label()
@@ -210,29 +140,28 @@ class SystemTray(QSystemTrayIcon):
         print(f"[Tray] Romanization: {state}")
         self.showMessage(
             "LyricsLay",
-            f"Romanization {state} — wait shortly or reidentify song to update lyrics.",
+            f"Romanization {state} — reidentify song to update lyrics.",
             QSystemTrayIcon.MessageIcon.Information,
             2000
         )
 
     def _update_rom_label(self):
-        """Sync romanization menu label."""
-        from src.core import settings
         state = settings.get("romanize_lyrics")
         self.rom_action.setText(
             f"Romanization: {'ON ✓' if state else 'OFF'}"
         )
+
     def _reset_position(self):
-        """Reset overlay to top center."""
-        from src.core import settings
-        from PyQt6.QtWidgets import QApplication
         settings.set("overlay_position", None)
         screen   = QApplication.primaryScreen()
         screen_w = screen.geometry().width()
-        w        = self.overlay.width()
-        self.overlay.move((screen_w - w) // 2, 40)
-        for h in ['close_handle', 'grip_handle', 'resize_handle',
-                  'restart_button', 'reidentify_button']:
+        self.overlay.move((screen_w - self.overlay.width()) // 2, 40)
+        for h in ("close_handle", "grip_handle", "resize_handle", "sync_handle"):
             if hasattr(self.overlay, h):
                 getattr(self.overlay, h).reposition()
         print("[Tray] Position reset.")
+
+    def _quit(self):
+        self.overlay.hide()
+        self.hide()
+        self.app.quit()

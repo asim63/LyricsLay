@@ -1,289 +1,337 @@
 from PyQt6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel,
-    QPushButton, QKeySequenceEdit, QFrame, QSizePolicy
+    QPushButton, QFrame, QWidget, QMessageBox
 )
-from PyQt6.QtCore import Qt
-from PyQt6.QtGui import QKeySequence, QFont
+from PyQt6.QtCore import Qt, QTimer
+from PyQt6.QtGui import QKeySequence, QFont, QKeyEvent
 from src.core import settings
 
+
+# ── single-key-combo capture widget ──────────────────────────────────────────
+
+class HotkeyEdit(QWidget):
+    """
+    A clean single-combination hotkey capture field.
+    Press any key combo — it shows instantly, replaces previous.
+    No stacking, no delay.
+    """
+
+    def __init__(self, initial: str = "", parent=None):
+        super().__init__(parent)
+        self.setFixedHeight(42)
+        self.setCursor(Qt.CursorShape.IBeamCursor)
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        self._value = initial   # stored as Qt string e.g. "Ctrl+Shift+L"
+        self._focused = False
+
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(12, 0, 12, 0)
+
+        self._label = QLabel(initial or "Click and press a key combo")
+        self._label.setFont(QFont("Segoe UI", 12))
+        self._label.setStyleSheet("color: #cdd6f4; background: transparent;")
+        layout.addWidget(self._label)
+
+        self._update_style(False)
+
+    def value(self) -> str:
+        return self._value
+
+    def focusInEvent(self, e):
+        self._focused = True
+        self._update_style(True)
+        self._label.setText("Press a key combo...")
+        self._label.setStyleSheet("color: #6c7086; background: transparent;")
+
+    def focusOutEvent(self, e):
+        self._focused = False
+        self._update_style(False)
+        self._label.setText(self._value or "Click and press a key combo")
+        self._label.setStyleSheet("color: #cdd6f4; background: transparent;")
+
+    def keyPressEvent(self, e: QKeyEvent):
+        # ignore lone modifiers
+        if e.key() in (Qt.Key.Key_Control, Qt.Key.Key_Shift,
+                       Qt.Key.Key_Alt, Qt.Key.Key_Meta):
+            return
+
+        mods = e.modifiers()
+        parts = []
+        if mods & Qt.KeyboardModifier.ControlModifier: parts.append("Ctrl")
+        if mods & Qt.KeyboardModifier.ShiftModifier:   parts.append("Shift")
+        if mods & Qt.KeyboardModifier.AltModifier:     parts.append("Alt")
+        if mods & Qt.KeyboardModifier.MetaModifier:    parts.append("Meta")
+
+        key_str = QKeySequence(e.key()).toString()
+        if key_str:
+            parts.append(key_str)
+
+        combo = "+".join(parts)
+        if combo:
+            self._value = combo
+            self._label.setText(combo)
+            self._label.setStyleSheet("color: #cdd6f4; background: transparent;")
+            self.clearFocus()
+
+    def _update_style(self, focused: bool):
+        border = "#7aa2f7" if focused else "#2a2a3a"
+        self.setStyleSheet(f"""
+            HotkeyEdit {{
+                background-color: #111118;
+                border: 1px solid {border};
+                border-radius: 8px;
+            }}
+        """)
+
+
+# ── settings window ───────────────────────────────────────────────────────────
+
 class SettingsWindow(QDialog):
-    """
-    Small popup window where the user can customise their hotkey.
-    Opens from the system tray menu.
-    """
 
     def __init__(self, parent=None, on_hotkey_changed=None):
         super().__init__(parent)
         self.on_hotkey_changed = on_hotkey_changed
-        self.current_settings  = settings.load_settings()
-
         self._setup_window()
         self._setup_ui()
 
     def _setup_window(self):
-        """Configure the window itself."""
         self.setWindowTitle("LyricsLay — Settings")
-        self.setFixedSize(420, 300)
+        self.setFixedSize(460, 520)
         self.setWindowFlags(
             Qt.WindowType.Dialog |
-            Qt.WindowType.WindowCloseButtonHint
+            Qt.WindowType.WindowCloseButtonHint |
+            Qt.WindowType.MSWindowsFixedSizeDialogHint
         )
-        # clean stylesheet
         self.setStyleSheet("""
             QDialog {
-                background-color: #1e1e2e;
+                background-color: #0d0d14;
             }
             QLabel {
-                color: #cdd6f4;
-                font-family: Arial;
+                background: transparent;
             }
             QPushButton {
-                background-color: #45475a;
-                color: #ffffff;
-                border: 1px solid #585b70;
-                border-radius: 6px;
+                background-color: #1a1a26;
+                color: #cdd6f4;
+                border: 1px solid #2a2a3a;
+                border-radius: 8px;
                 padding: 8px 20px;
-                font-family: Arial;
+                font-family: Segoe UI;
                 font-size: 13px;
-                font-weight: 500;
             }
             QPushButton:hover {
-                background-color: #585b70;
+                background-color: #222232;
+                border: 1px solid #3a3a5a;
             }
             QPushButton#save_btn {
-                background-color: #89b4fa;
-                color: #1e1e2e;
+                background-color: #3a3a5a;
+                color: #ffffff;
                 font-weight: bold;
-                border: none;
-            }
-            QPushButton#save_btn:hover {
-                background-color: #74c7ec;
-            }
-            QKeySequenceEdit {
-                background-color: #313244;
-                color: #cdd6f4;
-                border: 1px solid #45475a;
-                border-radius: 6px;
-                padding: 6px;
-                font-family: Arial;
+                border: 1px solid #5a5a8a;
                 font-size: 13px;
             }
-            QFrame#divider {
-                color: #45475a;
+            QPushButton#save_btn:hover {
+                background-color: #4a4a7a;
+                border: 1px solid #7a7aaa;
             }
         """)
 
     def _setup_ui(self):
         layout = QVBoxLayout(self)
-        layout.setSpacing(16)
-        layout.setContentsMargins(24, 24, 24, 24)
+        layout.setSpacing(0)
+        layout.setContentsMargins(0, 0, 0, 0)
 
+        # ── header ────────────────────────────────────────────────────
+        header = QWidget()
+        header.setFixedHeight(60)
+        header.setStyleSheet("background-color: #0d0d14; border-bottom: 1px solid #1a1a26;")
+        h_layout = QHBoxLayout(header)
+        h_layout.setContentsMargins(24, 0, 24, 0)
         title = QLabel("Settings")
-        title.setFont(QFont("Arial", 16, QFont.Weight.Bold))
-        title.setStyleSheet("color: #cdd6f4;")
-        layout.addWidget(title)
+        title.setFont(QFont("Segoe UI", 15, QFont.Weight.Bold))
+        title.setStyleSheet("color: #ffffff;")
+        h_layout.addWidget(title)
+        layout.addWidget(header)
 
-        divider = QFrame()
-        divider.setObjectName("divider")
-        divider.setFrameShape(QFrame.Shape.HLine)
-        divider.setStyleSheet("background-color: #45475a;")
-        divider.setFixedHeight(1)
-        layout.addWidget(divider)
+        # ── content ───────────────────────────────────────────────────
+        content = QWidget()
+        content.setStyleSheet("background: transparent;")
+        c_layout = QVBoxLayout(content)
+        c_layout.setSpacing(18)
+        c_layout.setContentsMargins(24, 24, 24, 24)
 
-        # ── toggle hotkey ─────────────────────────────────────────────
-        toggle_label = QLabel("Toggle hotkey")
-        toggle_label.setFont(QFont("Arial", 12))
-        toggle_label.setStyleSheet("color: #a6adc8;")
-        layout.addWidget(toggle_label)
-
-        toggle_desc = QLabel("Show / hide the lyrics overlay")
-        toggle_desc.setFont(QFont("Arial", 10))
-        toggle_desc.setStyleSheet("color: #6c7086;")
-        layout.addWidget(toggle_desc)
-
-        self.key_edit = QKeySequenceEdit()
-        current_hotkey = self.current_settings.get(
-            "hotkey", "<ctrl>+<shift>+l"
+        # toggle hotkey
+        c_layout.addWidget(self._label("Toggle Hotkey"))
+        c_layout.addWidget(self._desc("Show / hide the lyrics overlay"))
+        current_toggle = self._pynput_to_qt(
+            settings.get("hotkey") or "<ctrl>+<shift>+l"
         )
-        self.key_edit.setKeySequence(
-            QKeySequence(self._pynput_to_qt(current_hotkey))
+        self.key_edit = HotkeyEdit(current_toggle)
+        self.key_edit.setFocusPolicy(Qt.FocusPolicy.ClickFocus)
+        c_layout.addWidget(self.key_edit)
+
+        c_layout.addWidget(self._divider())
+
+        # reidentify hotkey
+        c_layout.addWidget(self._label("Reidentify Hotkey"))
+        c_layout.addWidget(self._desc("Force re-detect the current song"))
+        current_reid = self._pynput_to_qt(
+            settings.get("reidentify_hotkey") or "<ctrl>+<shift>+k"
         )
-        layout.addWidget(self.key_edit)
+        self.reid_edit = HotkeyEdit(current_reid)
+        self.reid_edit.setFocusPolicy(Qt.FocusPolicy.ClickFocus)
+        c_layout.addWidget(self.reid_edit)
 
-        # ── reidentify hotkey ─────────────────────────────────────────
-        reid_label = QLabel("Reidentify hotkey")
-        reid_label.setFont(QFont("Arial", 12))
-        reid_label.setStyleSheet("color: #a6adc8;")
-        layout.addWidget(reid_label)
+        c_layout.addWidget(self._divider())
 
-        reid_desc = QLabel("Force re-detect current song")
-        reid_desc.setFont(QFont("Arial", 10))
-        reid_desc.setStyleSheet("color: #6c7086;")
-        layout.addWidget(reid_desc)
+        # romanization row
+        rom_row = QHBoxLayout()
+        rom_text = QVBoxLayout()
+        rom_text.setSpacing(3)
+        rom_text.addWidget(self._label("Romanize Lyrics"))
+        rom_text.addWidget(self._desc("Convert Japanese / Korean to phonetic Latin"))
+        rom_row.addLayout(rom_text)
+        rom_row.addStretch()
 
-        self.reid_edit = QKeySequenceEdit()
-        current_reid = self.current_settings.get(
-            "reidentify_hotkey", "<ctrl>+<shift>+k"
+        self.rom_btn = QPushButton(
+            "ON" if settings.get("romanize_lyrics") else "OFF"
         )
-        self.reid_edit.setKeySequence(
-            QKeySequence(self._pynput_to_qt(current_reid))
-        )
-        layout.addWidget(self.reid_edit)
+        self.rom_btn.setFixedSize(60, 32)
+        self.rom_btn.setCheckable(True)
+        self.rom_btn.setChecked(bool(settings.get("romanize_lyrics")))
+        self._update_rom_style()
+        self.rom_btn.clicked.connect(self._on_rom_click)
+        rom_row.addWidget(self.rom_btn)
+        c_layout.addLayout(rom_row)
 
-        layout.addStretch()
+        c_layout.addStretch()
+        layout.addWidget(content)
 
-        # buttons
-        btn_row = QHBoxLayout()
-        btn_row.setSpacing(10)
+        # ── footer ────────────────────────────────────────────────────
+        footer = QWidget()
+        footer.setFixedHeight(64)
+        footer.setStyleSheet("background-color: #0d0d14; border-top: 1px solid #1a1a26;")
+        f_layout = QHBoxLayout(footer)
+        f_layout.setContentsMargins(24, 0, 24, 0)
+        f_layout.setSpacing(10)
 
-        cancel_btn = QPushButton("Cancel")
-        cancel_btn.setMinimumHeight(36)
-        cancel_btn.setMinimumWidth(100)
-        cancel_btn.clicked.connect(self.reject)
-        btn_row.addWidget(cancel_btn)
+        reset_btn = QPushButton("Reset to Default")
+        reset_btn.setFixedHeight(36)
+        reset_btn.clicked.connect(self._reset)
+        f_layout.addWidget(reset_btn)
 
-        reset_btn = QPushButton("Reset to default")
-        reset_btn.setMinimumHeight(36)
-        reset_btn.setMinimumWidth(130)
-        reset_btn.clicked.connect(self._reset_hotkeys)
-        btn_row.addWidget(reset_btn)
+        f_layout.addStretch()
 
         save_btn = QPushButton("Save")
         save_btn.setObjectName("save_btn")
-        save_btn.setMinimumHeight(36)
-        save_btn.setMinimumWidth(100)
+        save_btn.setFixedSize(100, 36)
         save_btn.clicked.connect(self._save)
-        btn_row.addWidget(save_btn)
+        f_layout.addWidget(save_btn)
 
-        layout.addLayout(btn_row)
+        layout.addWidget(footer)
 
-        # ── romanization toggle ───────────────────────────────────────
-        rom_divider = QFrame()
-        rom_divider.setFrameShape(QFrame.Shape.HLine)
-        rom_divider.setStyleSheet("background-color: #45475a;")
-        rom_divider.setFixedHeight(1)
-        layout.addWidget(rom_divider)
+    # ── helpers ───────────────────────────────────────────────────────
 
-        rom_row = QHBoxLayout()
+    def _label(self, text):
+        lbl = QLabel(text)
+        lbl.setFont(QFont("Segoe UI", 12, QFont.Weight.Medium))
+        lbl.setStyleSheet("color: #cdd6f4;")
+        return lbl
 
-        rom_label = QLabel("Romanize lyrics")
-        rom_label.setFont(QFont("Arial", 12))
-        rom_label.setStyleSheet("color: #a6adc8;")
-        rom_row.addWidget(rom_label)
+    def _desc(self, text):
+        lbl = QLabel(text)
+        lbl.setFont(QFont("Segoe UI", 10))
+        lbl.setStyleSheet("color: #4a4a6a;")
+        return lbl
 
-        rom_row.addStretch()
+    def _divider(self):
+        line = QFrame()
+        line.setFrameShape(QFrame.Shape.HLine)
+        line.setFixedHeight(1)
+        line.setStyleSheet("background-color: #1a1a26; border: none;")
+        return line
 
-        self.rom_toggle = QPushButton(
-            "ON" if settings.get("romanize_lyrics") else "OFF"
-        )
-        self.rom_toggle.setFixedSize(60, 30)
-        self.rom_toggle.setCheckable(True)
-        self.rom_toggle.setChecked(
-            settings.get("romanize_lyrics", False)
-        )
-        self.rom_toggle.setStyleSheet("""
-            QPushButton {
-                background-color: #45475a;
-                color: #cdd6f4;
-                border-radius: 6px;
-                font-size: 12px;
-                font-weight: bold;
-            }
-            QPushButton:checked {
-                background-color: #89b4fa;
-                color: #1e1e2e;
-            }
-        """)
-        self.rom_toggle.clicked.connect(
-            lambda: self.rom_toggle.setText(
-                "ON" if self.rom_toggle.isChecked() else "OFF"
-            )
-        )
-        rom_row.addWidget(self.rom_toggle)
-        layout.addLayout(rom_row)
+    def _on_rom_click(self):
+        self.rom_btn.setText("ON" if self.rom_btn.isChecked() else "OFF")
+        self._update_rom_style()
 
-        rom_desc = QLabel(
-            "Convert Japanese/Korean/Hindi to phonetic Latin"
-        )
-        rom_desc.setFont(QFont("Arial", 10))
-        rom_desc.setStyleSheet("color: #6c7086;")
-        layout.addWidget(rom_desc)
-        
-        
-    def _save(self):
-        """Save both hotkeys."""
-        qt_toggle = self.key_edit.keySequence().toString()
-        qt_reid   = self.reid_edit.keySequence().toString()
-
-        if qt_toggle:
-            pynput_toggle = self._qt_to_pynput(qt_toggle)
-            settings.set("hotkey", pynput_toggle)
-
-        if qt_reid:
-            pynput_reid = self._qt_to_pynput(qt_reid)
-            settings.set("reidentify_hotkey", pynput_reid)
-
-        if self.on_hotkey_changed:
-            self.on_hotkey_changed(
-                settings.get("hotkey"),
-                settings.get("reidentify_hotkey")
-            )
-        self.accept()
-
-    def _reset_hotkeys(self):
-        """Reset both hotkeys to defaults."""
-        self.key_edit.setKeySequence(QKeySequence("Ctrl+Shift+L"))
-        self.reid_edit.setKeySequence(QKeySequence("Ctrl+Shift+K"))
+    def _update_rom_style(self):
+        if self.rom_btn.isChecked():
+            self.rom_btn.setStyleSheet("""
+                QPushButton {
+                    background-color: #ffffff;
+                    color: #0d0d14;
+                    border-radius: 8px;
+                    font-size: 12px;
+                    font-weight: bold;
+                    border: none;
+                }
+                QPushButton:hover { background-color: #e0e0e0; }
+            """)
+        else:
+            self.rom_btn.setStyleSheet("""
+                QPushButton {
+                    background-color: #1a1a26;
+                    color: #4a4a6a;
+                    border-radius: 8px;
+                    font-size: 12px;
+                    font-weight: bold;
+                    border: 1px solid #2a2a3a;
+                }
+                QPushButton:hover { background-color: #222232; }
+            """)
 
     def _save(self):
-        """Save the new hotkey and notify the app."""
-        qt_sequence = self.key_edit.keySequence().toString()
-        if not qt_sequence:
+        toggle_qt = self.key_edit.value()
+        reid_qt   = self.reid_edit.value()
+
+        # duplicate hotkey check
+        if toggle_qt and reid_qt and toggle_qt == reid_qt:
+            msg = QMessageBox(self)
+            msg.setWindowTitle("Hotkey Conflict")
+            msg.setText(toggle_qt + " is already assigned to another action.\nPlease choose a different combination.")
+            msg.setIcon(QMessageBox.Icon.Warning)
+            msg.setStyleSheet("background-color: #0d0d14; color: #cdd6f4; font-family: Segoe UI;")
+            msg.exec()
             return
 
-        # convert Qt format back to pynput format
-        pynput_hotkey = self._qt_to_pynput(qt_sequence)
-        settings.set("hotkey", pynput_hotkey)
-        settings.set("romanize_lyrics", self.rom_toggle.isChecked())
 
-        # notify the app to re-register the hotkey
+        if toggle_qt:
+            settings.set("hotkey", self._qt_to_pynput(toggle_qt))
+        if reid_qt:
+            settings.set("reidentify_hotkey", self._qt_to_pynput(reid_qt))
+
+        settings.set("romanize_lyrics", self.rom_btn.isChecked())
+
         if self.on_hotkey_changed:
-            self.on_hotkey_changed(pynput_hotkey)
+            self.on_hotkey_changed(settings.get("hotkey"))
 
         self.accept()
 
-    def _reset_hotkey(self):
-        """Reset hotkey to default Ctrl+Shift+L."""
-        self.key_edit.setKeySequence(QKeySequence("Ctrl+Shift+L"))
+    def _reset(self):
+        self.key_edit._value = "Ctrl+Shift+L"
+        self.key_edit._label.setText("Ctrl+Shift+L")
+        self.reid_edit._value = "Ctrl+Shift+K"
+        self.reid_edit._label.setText("Ctrl+Shift+K")
 
     def _pynput_to_qt(self, pynput: str) -> str:
-        """
-        Converts pynput format to Qt format for display.
-        e.g. "<ctrl>+<shift>+l" → "Ctrl+Shift+L"
-        """
-        return (pynput
-            .replace("<ctrl>",  "Ctrl")
-            .replace("<shift>", "Shift")
-            .replace("<alt>",   "Alt")
-            .replace("<cmd>",   "Meta")
-            .upper()
-            .replace("CTRL",  "Ctrl")
-            .replace("SHIFT", "Shift")
-            .replace("ALT",   "Alt")
-            .replace("META",  "Meta")
-        )
+        parts = pynput.split("+")
+        result = []
+        for p in parts:
+            p = p.strip()
+            if p == "<ctrl>":    result.append("Ctrl")
+            elif p == "<shift>": result.append("Shift")
+            elif p == "<alt>":   result.append("Alt")
+            elif p == "<cmd>":   result.append("Meta")
+            else:                result.append(p.upper())
+        return "+".join(result)
 
     def _qt_to_pynput(self, qt: str) -> str:
-        """
-        Converts Qt format back to pynput format for saving.
-        e.g. "Ctrl+Shift+L" → "<ctrl>+<shift>+l"
-        """
-        result = qt
-        result = result.replace("Ctrl",  "<ctrl>")
-        result = result.replace("Shift", "<shift>")
-        result = result.replace("Alt",   "<alt>")
-        result = result.replace("Meta",  "<cmd>")
-        # lowercase the actual key letter
-        parts = result.split("+")
-        parts[-1] = parts[-1].lower()
-        return "+".join(parts)
+        parts = qt.split("+")
+        result = []
+        for p in parts:
+            if p == "Ctrl":    result.append("<ctrl>")
+            elif p == "Shift": result.append("<shift>")
+            elif p == "Alt":   result.append("<alt>")
+            elif p == "Meta":  result.append("<cmd>")
+            else:              result.append(p.lower())
+        return "+".join(result)
