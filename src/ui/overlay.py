@@ -730,9 +730,5 @@ class LyricsOverlay(QWidget):
 # ── dummy placeholder so main.py's on_click assignment doesn't crash ──────────
 
 class _DummyButton:
-    """
-    Placeholder for reidentify_button.
-    main.py does:  self.overlay.reidentify_button.on_click = self._on_force_reidentify
-    We keep that attribute here so nothing breaks.
-    """
     on_click = None
+    def reposition(self): pass

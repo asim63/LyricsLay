@@ -32,33 +32,25 @@ class SystemTray(QSystemTrayIcon):
     # ─── Icon ────────────────────────────────────────────────────────
 
     def _setup_icon(self):
-        """
-        Creates a simple coloured circle as the tray icon.
-        We'll replace this with a real icon file later.
-        """
-        pixmap  = QPixmap(32, 32)
-        pixmap.fill(Qt.GlobalColor.transparent)
-
-        painter = QPainter(pixmap)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        painter.setBrush(QColor("#89b4fa"))
-        painter.setPen(Qt.PenStyle.NoPen)
-        painter.drawEllipse(2, 2, 28, 28)
-
-        # draw a small music note shape
-        painter.setBrush(QColor("#1e1e2e"))
-        painter.drawEllipse(6, 18, 8, 8)   # note head
-        painter.drawEllipse(18, 14, 8, 8)  # note head 2
-        painter.setPen(QColor("#1e1e2e"))
-        from PyQt6.QtGui import QPen
-        pen = QPen(QColor("#1e1e2e"), 2)
-        painter.setPen(pen)
-        painter.drawLine(14, 22, 14, 8)    # stem 1
-        painter.drawLine(26, 18, 26, 4)    # stem 2
-        painter.drawLine(14, 8, 26, 4)     # beam
-        painter.end()
-
-        self.setIcon(QIcon(pixmap))
+        import os
+        icon_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 
+                                "..", "..", "assets", "icon.ico")
+        icon_path = os.path.normpath(icon_path)
+        
+        if os.path.exists(icon_path):
+            self.setIcon(QIcon(icon_path))
+        else:
+            # fallback to drawn icon if file not found
+            pixmap  = QPixmap(32, 32)
+            pixmap.fill(Qt.GlobalColor.transparent)
+            painter = QPainter(pixmap)
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+            painter.setBrush(QColor("#89b4fa"))
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.drawEllipse(2, 2, 28, 28)
+            painter.end()
+            self.setIcon(QIcon(pixmap))
+        
         self.setToolTip("LyricsLay")
         self.setVisible(True)
 

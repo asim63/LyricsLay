@@ -49,8 +49,8 @@ def save_settings(data: dict):
     print("[Settings] Saved.")
 
 
-def get(key: str):
-    return load_settings().get(key, DEFAULTS.get(key))
+def get(key: str, default=None):
+    return load_settings().get(key, default if default is not None else DEFAULTS.get(key))
 
 
 def set(key: str, value):
