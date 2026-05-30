@@ -267,6 +267,7 @@ class LyricsOverlay(QWidget):
         self._unsynced_secs_per_line = 6.0
         self._anim_group             = None
         self._animating              = False
+        self._is_synced              = True
 
         # reidentify callback — set by main.py after init
         self.reidentify_button = _DummyButton()  # placeholder, main.py sets on_click
@@ -365,7 +366,7 @@ class LyricsOverlay(QWidget):
         self.caption_badge.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         self.caption_badge.setFont(QFont("Segoe UI", 8))
         self.caption_badge.setStyleSheet(
-            "color: rgba(255,255,255,50); background: transparent; border: none;"
+            "color: rgba(255,255,255,255); background: transparent; border: none;"
         )
         self.caption_badge.hide()
         pill_layout.addWidget(self.caption_badge)
@@ -530,6 +531,7 @@ class LyricsOverlay(QWidget):
                 self.playback_time = 0.0
 
         self.current_index = start_index
+        self._is_synced    = synced
         self._set_display_instant(start_index)
         self.timer.start()
         print(f"[Overlay] Loaded {len(lyrics)} lines "
@@ -595,8 +597,9 @@ class LyricsOverlay(QWidget):
         if total == 0:
             return
 
-        # fast lyrics — skip animation to avoid lag
-        if index < total - 1:
+        # fast lyrics — skip animation to avoid lag (only for synced)
+        synced = any(e["t"] > 0 for e in self.lyrics)
+        if synced and index < total - 1:
             gap = self.lyrics[index + 1]["t"] - self.lyrics[index]["t"]
             if gap < 1.5:
                 self._set_display_instant(index)

@@ -90,7 +90,7 @@ class SystemTray(QSystemTrayIcon):
         menu.addAction("Reset position").triggered.connect(self._reset_position)
 
         menu.addSeparator()
-
+        menu.addAction("Restart LyricsLay").triggered.connect(self._restart)
         menu.addAction("Quit LyricsLay").triggered.connect(self._quit)
 
         self.setContextMenu(menu)
@@ -160,6 +160,14 @@ class SystemTray(QSystemTrayIcon):
             if hasattr(self.overlay, h):
                 getattr(self.overlay, h).reposition()
         print("[Tray] Position reset.")
+        
+    def _restart(self):
+        """Restart the entire application."""
+        import os
+        print("[Tray] Restarting LyricsLay...")
+        self.overlay.hide()
+        self.hide()
+        os.execv(sys.executable, [sys.executable] + sys.argv)
 
     def _quit(self):
         self.overlay.hide()

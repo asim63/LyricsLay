@@ -68,6 +68,7 @@ class LyricsLayApp:
         self.running               = True
         self.identifying           = False
         self.force_reidentify_flag = False
+        self.current_song_synced   = True
         self._shazam_lock          = threading.Lock()
 
         self._connect_signals()
@@ -202,8 +203,9 @@ class LyricsLayApp:
                         print("[Detector] False positive — ignoring.")
 
                 else:
-                    # same song — check position every cycle
-                    if self.current_song_id and not self.identifying:
+                    # same song — check position every cycle (synced only)
+                    if (self.current_song_id and not self.identifying
+                            and self.current_song_synced):
                         threading.Thread(
                             target=self._check_position_jump,
                             args=(audio,),
@@ -219,8 +221,8 @@ class LyricsLayApp:
     def _check_position_jump(self, audio: np.ndarray):
         """
         Checks if user skipped within same song.
-        Reuses already-recorded audio — no extra recording.
-        Resyncs if position differs by more than 5 seconds.
+        Song change detection always runs.
+        Position resync skipped for unsynced lyrics.
         """
         if not self.current_song_id or self.identifying:
             return
@@ -242,6 +244,10 @@ class LyricsLayApp:
                 self.current_song_id     = None
                 self.current_fingerprint = None
                 self._trigger_identification(audio)
+                return
+
+            # skip position resync for unsynced lyrics — timestamps are all 0
+            if not getattr(self.overlay, "_is_synced", True):
                 return
 
             new_offset_ms  = song.get("offset_ms", 0.0)
@@ -349,12 +355,19 @@ class LyricsLayApp:
         Full pipeline: Audio → Shazam → Lyrics → Overlay.
         Compensates for recording + API delay in sync offset.
         """
+
         self.identifying = True
-        self.bridge.show_loading.emit()
 
         try:
             print("[Identifier] Identifying...")
 
+            # Empty audio protection
+            if audio.size == 0:
+                print("[Identifier] Empty audio buffer — retrying...")
+                self.bridge.show_no_lyrics.emit()
+                return
+
+            # Retry short recordings
             if len(audio) < 16000 * 4:
                 print("[Identifier] Audio too short — retrying capture...")
                 audio = record_audio(duration=5)
@@ -363,25 +376,27 @@ class LyricsLayApp:
                     print("[Identifier] Retry capture failed.")
                     self.bridge.show_no_lyrics.emit()
                     return
-                
+
             with self._shazam_lock:
                 song = recognise_song(audio)
 
             if song is None:
                 print("[Identifier] No match.")
                 self.bridge.show_no_lyrics.emit()
-                self.current_song_id     = None
+                self.current_song_id = None
                 self.current_fingerprint = None
                 return
 
-            shazam_id    = song["shazam_id"]
-            title        = song["title"]
-            artist       = song["artist"]
-            offset_ms    = song.get("offset_ms", 0.0)
+            shazam_id = song["shazam_id"]
+            title = song["title"]
+            artist = song["artist"]
+            offset_ms = song.get("offset_ms", 0.0)
             shazam_delay = song.get("shazam_delay_ms", 0.0)
 
-            print(f"[Identifier] {title} by {artist} "
-                  f"(raw offset: {offset_ms:.0f}ms)")
+            print(
+                f"[Identifier] {title} by {artist} "
+                f"(raw offset: {offset_ms:.0f}ms)"
+            )
 
             SAMPLE_MS = config.SAMPLE_DURATION * 1000
             LYRICS_MS = 500
@@ -401,66 +416,145 @@ class LyricsLayApp:
                 else shazam_id
             )
 
-            # same song — just resync position
+            # SAME SONG HANDLING
             if shazam_id == self.current_song_id:
-                print("[Identifier] Same song — resyncing.")
-                self._resync_position(shazam_id, adjusted_offset)
+
+                # synced lyrics → allow proper resync
+                if getattr(self, "current_song_synced", False):
+
+                    print("[Identifier] Same song — resyncing.")
+
+                    self._resync_position(
+                        shazam_id,
+                        adjusted_offset
+                    )
+
+                else:
+                    # unsynced lyrics should NOT resync
+                    print(
+                        "[Identifier] Same unsynced song — "
+                        "keeping auto-scroll."
+                    )
+                    
                 return
 
-            # new song!
+            # NEW SONG
+            self.bridge.show_loading.emit()
             self.current_song_id = shazam_id
-            self.last_offset_ms  = adjusted_offset
+            self.last_offset_ms = adjusted_offset
+
             self.bridge.song_changed.emit(title, artist)
 
             lyrics_start = time.time()
 
-            # load from cache using cache_key
+            # load from cache
             if is_cached(cache_key):
-                cached       = get_cached_song(cache_key)
-                cache_offset = offset_ms + SAMPLE_MS + shazam_delay
-                print(f"[Identifier] From cache! ✅ "
-                      f"Offset: {cache_offset:.0f}ms")
-                self.bridge.show_lyrics.emit(
-                    cached["lyrics"], False, cache_offset
+
+                cached = get_cached_song(cache_key)
+
+                cache_offset = (
+                    offset_ms +
+                    SAMPLE_MS +
+                    shazam_delay
                 )
+
+                print(
+                    f"[Identifier] From cache! ✅ "
+                    f"Offset: {cache_offset:.0f}ms"
+                )
+
+                # determine if cached lyrics are synced
+                synced = cached["lyrics"] and any(
+                    entry["t"] > 0
+                    for entry in cached["lyrics"]
+                )
+
+                self.current_song_synced = synced
+
+                self.bridge.show_lyrics.emit(
+                    cached["lyrics"],
+                    False,
+                    cache_offset
+                )
+
                 return
 
-            # fetch from APIs
+            # fetch lyrics
             lyrics = fetch_lyrics(title, artist)
 
-            actual_lyrics_ms = (time.time() - lyrics_start) * 1000
-            final_offset     = max(
-                0, adjusted_offset + actual_lyrics_ms - LYRICS_MS
-            )
+            actual_lyrics_ms = (
+                time.time() - lyrics_start
+            ) * 1000
 
+            final_offset = max(
+                0,
+                adjusted_offset +
+                actual_lyrics_ms -
+                LYRICS_MS
+            )
             synced = lyrics and any(
-                entry["t"] > 0 for entry in lyrics
+                entry["t"] > 0
+                for entry in lyrics
             )
+            # IMPORTANT
+            self.current_song_synced = synced
 
+            # SYNCED LYRICS
             if lyrics and synced:
-                cache_song(cache_key, title, artist, lyrics)
-                self.bridge.show_lyrics.emit(lyrics, False, final_offset)
 
-                print(f"[Identifier] Done. Offset: {final_offset:.0f}ms")
+                cache_song(
+                    cache_key,
+                    title,
+                    artist,
+                    lyrics
+                )
 
+                self.bridge.show_lyrics.emit(
+                    lyrics,
+                    False,
+                    final_offset
+                )
+
+                print(
+                    f"[Identifier] Done. "
+                    f"Offset: {final_offset:.0f}ms"
+                )
+            # UNSYNCED LYRICS
             elif lyrics and not synced:
-                print("[Identifier] Unsynced lyrics — auto-scroll mode.")
-                self.bridge.show_lyrics.emit(lyrics, False, final_offset)
-
+                print(
+                    "[Identifier] Unsynced lyrics — "
+                    "auto-scroll mode."
+                )
+                self.bridge.show_lyrics.emit(
+                    lyrics,
+                    False,
+                    final_offset
+                )
+            # NO LYRICS
             else:
-                cache_song(cache_key, title, artist, [])
+                cache_song(
+                    cache_key,
+                    title,
+                    artist,
+                    []
+                )
+                self.current_song_synced = False
                 print("[Identifier] No lyrics found.")
                 self.bridge.show_no_lyrics.emit()
-                
+
         except Exception as e:
             print(f"[Identifier] Error: {e}")
+            self.current_song_synced = False
             self.bridge.show_no_lyrics.emit()
-
         finally:
             self.identifying = False
 
     def _resync_position(self, shazam_id: str, offset_ms: float):
         """Resyncs lyrics to correct position after skip."""
+        # never resync unsynced lyrics — they have no timestamps
+        if not getattr(self.overlay, "_is_synced", True):
+            return
+    
         from src.core.settings import get as get_setting
         cache_key = (
             f"{shazam_id}_rom"
