@@ -18,10 +18,7 @@ def romanize(text: str) -> str:
 
     if _is_korean(text):
         return _romanize_korean(text)
-
-    if _is_devanagari(text):
-        return _romanize_hindi(text)
-
+    
     return text  # unsupported script — return original
 
 # ─── Language detection ───────────────────────────────────────────────────────
@@ -41,14 +38,6 @@ def _is_korean(text: str) -> bool:
     for c in text:
         cp = ord(c)
         if 0xAC00 <= cp <= 0xD7A3:  # Hangul syllables
-            return True
-    return False
-
-def _is_devanagari(text: str) -> bool:
-    """Detects Hindi/Devanagari script."""
-    for c in text:
-        cp = ord(c)
-        if 0x0900 <= cp <= 0x097F:  # Devanagari block
             return True
     return False
 
@@ -84,21 +73,4 @@ def _romanize_korean(text: str) -> str:
         return text
     except Exception as e:
         print(f"[Romanizer] Korean error: {e}")
-        return text
-
-def _romanize_hindi(text: str) -> str:
-    """Hindi Devanagari → Latin using indic-transliteration."""
-    try:
-        from indic_transliteration import sanscript
-        from indic_transliteration.sanscript import transliterate
-        return transliterate(
-            text,
-            sanscript.DEVANAGARI,
-            sanscript.IAST    # IAST = standard Latin for Indian scripts and HK = Harvard-Kyoto, more ASCII-friendly
-        )
-    except ImportError:
-        print("[Romanizer] indic-transliteration not installed — pip install indic-transliteration")
-        return text
-    except Exception as e:
-        print(f"[Romanizer] Hindi error: {e}")
         return text

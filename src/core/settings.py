@@ -12,7 +12,7 @@ DEFAULTS = {
     "overlay_opacity":   config.OVERLAY_OPACITY,
     "font_size":         config.FONT_SIZE_CURRENT,
     "show_on_startup":   True,
-    "romanize_lyrics":   False,
+    "romanize_lyrics":   True,
 }
 
 SETTINGS_FILE = os.path.join(config.CACHE_DIR, "settings.json")
