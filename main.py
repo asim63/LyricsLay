@@ -70,6 +70,8 @@ class LyricsLayApp:
         self.force_reidentify_flag = False
         self.current_song_synced   = True
         self._shazam_lock          = threading.Lock()
+        self._last_position_fp     = None   # fingerprint at last position check
+        self._last_shazam_time     = 0.0    # timestamp of last Shazam position call
 
         self._connect_signals()
         self._register_hotkeys()
@@ -203,14 +205,10 @@ class LyricsLayApp:
                         print("[Detector] False positive — ignoring.")
 
                 else:
-                    # same song — check position every cycle (synced only)
+                    # same song — smart position check (every cycle)
                     if (self.current_song_id and not self.identifying
                             and self.current_song_synced):
-                        threading.Thread(
-                            target=self._check_position_jump,
-                            args=(audio,),
-                            daemon=True
-                        ).start()
+                        self._smart_position_check(audio, fingerprint)
 
                 time.sleep(4)
 
@@ -218,17 +216,74 @@ class LyricsLayApp:
                 print(f"[Detector] Error: {e}")
                 time.sleep(3)
 
+    def _smart_position_check(self, audio: np.ndarray, fingerprint: np.ndarray):
+        """
+        Smart position check — runs every cycle.
+        Calls Shazam when: fingerprint jumps OR 15s since last call.
+        """
+        now = time.time()
+
+        # first check — always do Shazam to establish baseline
+        if self._last_position_fp is None:
+            self._last_position_fp = fingerprint
+            self._last_shazam_time = now
+            threading.Thread(
+                target=self._check_position_jump,
+                args=(audio,),
+                daemon=True
+            ).start()
+            return
+
+        # ── Trigger 1: fingerprint jump = skip detected ──────────────
+        diff = self._fingerprint_diff(fingerprint, self._last_position_fp)
+        if diff >= 0.35:
+            print(f"[Detector] Fingerprint jump: {diff:.2%} — checking position")
+            self._last_position_fp = fingerprint
+            self._last_shazam_time = now
+            threading.Thread(
+                target=self._check_position_jump,
+                args=(audio,),
+                daemon=True
+            ).start()
+            return
+
+        # ── Trigger 2: periodic safety net (every 15s) ──────────────
+        if now - self._last_shazam_time >= 15.0:
+            self._last_position_fp = fingerprint
+            self._last_shazam_time = now
+            threading.Thread(
+                target=self._check_position_jump,
+                args=(audio,),
+                daemon=True
+            ).start()
+            return
+
+        # audio is stable — wall-clock timer keeps scrolling accurately
+
+    def _fingerprint_diff(self, fp1: np.ndarray, fp2: np.ndarray) -> float:
+        """Compare two fingerprints. Returns 0.0 = identical, 1.0 = very different."""
+        if fp2[3] < 10 and fp1[3] < 10:
+            return 0.0
+        if fp2[3] < 10 or fp1[3] < 10:
+            return 1.0
+        diffs = []
+        for i in range(3):
+            if fp2[i] == 0:
+                continue
+            diffs.append(abs(fp1[i] - fp2[i]) / (abs(fp2[i]) + 1e-8))
+        if not diffs:
+            return 0.0
+        return float(np.mean(diffs))
+
     def _check_position_jump(self, audio: np.ndarray):
         """
-        Checks if user skipped within same song.
-        Song change detection always runs.
-        Position resync skipped for unsynced lyrics.
+        Full Shazam position check — called when fingerprint shows a skip.
+        Uses resync_to() for zero-drift timer update.
         """
         if not self.current_song_id or self.identifying:
             return
 
         if not self._shazam_lock.acquire(blocking=False):
-            print("[Detector] Shazam busy — skipping.")
             return
 
         try:
@@ -246,33 +301,25 @@ class LyricsLayApp:
                 self._trigger_identification(audio)
                 return
 
-            # skip position resync for unsynced lyrics — timestamps are all 0
             if not getattr(self.overlay, "_is_synced", True):
                 return
 
-            new_offset_ms  = song.get("offset_ms", 0.0)
-            shazam_delay   = song.get("shazam_delay_ms", 0.0)
-
-            current_pos_ms = (
-                new_offset_ms +
-                config.SAMPLE_DURATION * 1000 +
-                shazam_delay
-            )
-
+            # raw position — wall-clock timer handles the rest
+            # raw position + recording duration
+            new_pos_ms = song.get("offset_ms", 0.0) + (config.SAMPLE_DURATION * 1000)
             expected_ms = self.overlay.playback_time * 1000
-            diff_ms     = abs(current_pos_ms - expected_ms)
+            diff_ms = abs(new_pos_ms - expected_ms)
 
             print(f"[Detector] Position — "
                   f"expected: {expected_ms/1000:.1f}s  "
-                  f"actual: {current_pos_ms/1000:.1f}s  "
+                  f"actual: {new_pos_ms/1000:.1f}s  "
                   f"diff: {diff_ms/1000:.1f}s")
 
-            if diff_ms > 5000:
-                print("[Detector] Jump detected! Resyncing...")
-                self._resync_position(
-                    self.current_song_id,
-                    current_pos_ms
-                )
+            # any significant difference → resync (wall-clock handles drift)
+            if diff_ms > 3000:
+                print("[Detector] Skip detected! Resyncing...")
+                # resync via Qt signal — thread-safe, runs on main thread
+                self.overlay.resync_signal.emit(new_pos_ms / 1000.0)
 
         except Exception as e:
             print(f"[Detector] Position check error: {e}")
@@ -398,15 +445,9 @@ class LyricsLayApp:
                 f"(raw offset: {offset_ms:.0f}ms)"
             )
 
-            SAMPLE_MS = config.SAMPLE_DURATION * 1000
-            LYRICS_MS = 500
-
-            adjusted_offset = (
-                offset_ms +
-                SAMPLE_MS +
-                shazam_delay +
-                LYRICS_MS
-            )
+            # raw position + recording duration compensation
+            # offset_ms is where song was during recording, add recording time
+            current_pos_ms = offset_ms + (config.SAMPLE_DURATION * 1000)
 
             # determine cache key based on romanization setting
             from src.core.settings import get as get_setting
@@ -426,7 +467,7 @@ class LyricsLayApp:
 
                     self._resync_position(
                         shazam_id,
-                        adjusted_offset
+                        current_pos_ms
                     )
 
                 else:
@@ -441,26 +482,18 @@ class LyricsLayApp:
             # NEW SONG
             self.bridge.show_loading.emit()
             self.current_song_id = shazam_id
-            self.last_offset_ms = adjusted_offset
+            self.last_offset_ms = current_pos_ms
 
             self.bridge.song_changed.emit(title, artist)
-
-            lyrics_start = time.time()
 
             # load from cache
             if is_cached(cache_key):
 
                 cached = get_cached_song(cache_key)
 
-                cache_offset = (
-                    offset_ms +
-                    SAMPLE_MS +
-                    shazam_delay
-                )
-
                 print(
                     f"[Identifier] From cache! ✅ "
-                    f"Offset: {cache_offset:.0f}ms"
+                    f"Position: {current_pos_ms/1000:.1f}s"
                 )
 
                 # determine if cached lyrics are synced
@@ -474,24 +507,13 @@ class LyricsLayApp:
                 self.bridge.show_lyrics.emit(
                     cached["lyrics"],
                     False,
-                    cache_offset
+                    current_pos_ms
                 )
 
                 return
 
             # fetch lyrics
             lyrics = fetch_lyrics(title, artist)
-
-            actual_lyrics_ms = (
-                time.time() - lyrics_start
-            ) * 1000
-
-            final_offset = max(
-                0,
-                adjusted_offset +
-                actual_lyrics_ms -
-                LYRICS_MS
-            )
             synced = lyrics and any(
                 entry["t"] > 0
                 for entry in lyrics
@@ -512,12 +534,12 @@ class LyricsLayApp:
                 self.bridge.show_lyrics.emit(
                     lyrics,
                     False,
-                    final_offset
+                    current_pos_ms
                 )
 
                 print(
                     f"[Identifier] Done. "
-                    f"Offset: {final_offset:.0f}ms"
+                    f"Position: {current_pos_ms/1000:.1f}s"
                 )
             # UNSYNCED LYRICS
             elif lyrics and not synced:
@@ -528,7 +550,7 @@ class LyricsLayApp:
                 self.bridge.show_lyrics.emit(
                     lyrics,
                     False,
-                    final_offset
+                    current_pos_ms
                 )
             # NO LYRICS
             else:

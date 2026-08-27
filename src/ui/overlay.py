@@ -31,6 +31,7 @@ from PyQt6.QtCore import (
 from PyQt6.QtGui import QFont, QColor, QPainter, QPainterPath
 from src.core import settings
 import config
+import time as _time
 
 
 # ── animation constants ───────────────────────────────────────────────────────
@@ -254,6 +255,7 @@ class LyricsOverlay(QWidget):
     """
 
     toggle_requested = pyqtSignal()
+    resync_signal    = pyqtSignal(float)  # emits new position in seconds
 
     def __init__(self):
         super().__init__()
@@ -268,6 +270,8 @@ class LyricsOverlay(QWidget):
         self._anim_group             = None
         self._animating              = False
         self._is_synced              = True
+        self._song_pos               = 0.0   # song position in seconds (anchor)
+        self._wall_start             = 0.0   # wall-clock time when anchor was set
 
         # reidentify callback — set by main.py after init
         self.reidentify_button = _DummyButton()  # placeholder, main.py sets on_click
@@ -276,6 +280,7 @@ class LyricsOverlay(QWidget):
         self._setup_ui()
         self._setup_timer()
         self._position_window()
+        self.resync_signal.connect(self.resync_to)
 
         self.close_handle  = CloseButton(self)
         self.grip_handle   = GripHandle(self)
@@ -449,8 +454,10 @@ class LyricsOverlay(QWidget):
 
     def _setup_timer(self):
         self.playback_time = 0.0
+        self._song_pos = 0.0
+        self._wall_start = _time.time()
         self.timer = QTimer()
-        self.timer.setInterval(100)
+        self.timer.setInterval(50)  # 50ms for smoother updates
         self.timer.timeout.connect(self._tick)
 
     def _position_window(self):
@@ -512,7 +519,9 @@ class LyricsOverlay(QWidget):
         synced = any(e["t"] > 0 for e in lyrics)
 
         if synced:
-            self.playback_time = start_ms / 1000.0
+            self._song_pos = start_ms / 1000.0
+            self._wall_start = _time.time()
+            self.playback_time = self._song_pos
             self.caption_badge.hide()
         else:
             self.playback_time = 0.0
@@ -558,8 +567,27 @@ class LyricsOverlay(QWidget):
 
     # ─── tick ─────────────────────────────────────────────────────────────────
 
+    def resync_to(self, new_pos_sec: float):
+        """Resync timer to a new song position (from Shazam)."""
+        self._song_pos = new_pos_sec
+        self._wall_start = _time.time()
+        self.playback_time = new_pos_sec
+        # force lyrics display refresh
+        if self.lyrics:
+            synced = any(e["t"] > 0 for e in self.lyrics)
+            if synced:
+                new_index = 0
+                for i, e in enumerate(self.lyrics):
+                    if e["t"] <= new_pos_sec:
+                        new_index = i
+                    else:
+                        break
+                self.current_index = new_index
+                self._set_display_instant(new_index)
+
     def _tick(self):
-        self.playback_time += 0.1
+        # wall-clock time — zero drift
+        self.playback_time = self._song_pos + (_time.time() - self._wall_start)
         if not self.lyrics:
             return
 

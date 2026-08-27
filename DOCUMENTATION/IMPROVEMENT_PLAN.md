@@ -91,27 +91,50 @@
 
 ---
 
-## Phase 3 — Speed: Smarter Position Detection
+## Phase 3 — Position Check: Smarter, Not Slower
 
-> **Goal:** Stop running full Shazam every 4s for position checks
+> **Goal:** Make position checks fast and accurate while keeping them frequent
+
+### Context
+The current position check runs a full Shazam API call every cycle (~4 seconds). This is
+heavy but keeps lyrics accurately synced. The goal is to make this **smarter** — not to
+reduce frequency, but to skip unnecessary Shazam calls when the audio is stable, while
+keeping the checks frequent for quick skip detection and accurate sync.
 
 ### Changes
 
-1. **`main.py`** — Reduce position-check frequency:
-   - Only run position resync every 30s instead of every cycle
-   - Skip position check entirely if song was identified < 15s ago
-   - Use fingerprint comparison before triggering Shazam (skip if audio is stable)
+1. **Fingerprint-based skip detection** (`main.py`):
+   - Compare current fingerprint to the one from the last position check
+   - If fingerprint difference < 35% → audio is stable → **skip Shazam** (overlay timer handles scrolling)
+   - If fingerprint difference ≥ 35% → likely a skip → call Shazam to get new position
+   - This eliminates ~80% of Shazam calls during normal playback
 
-2. **`main.py`** — Debounce position checks:
-   - Don't start a new position-check thread if one is already running
-   - Add a cooldown timer
+2. **Periodic drift correction** (`main.py`):
+   - Every 12 seconds, run Shazam regardless of fingerprint to correct timer drift
+   - If drift > 1s: apply 60% gradual correction (gentle, no jarring jump)
+   - If drift > 3s + skip detected: snap immediately to new position
+
+3. **Signal-based lyrics refresh** (`overlay.py`):
+   - Add `drift_corrected` signal to `LyricsOverlay`
+   - After drift correction, emit signal → overlay recalculates lyric index on main thread
+   - Prevents frozen lyrics after time correction
+
+### Architecture
+```
+Every 4s cycle:
+  ├── Fingerprint stable (< 35%)? → No Shazam, overlay timer scrolls
+  ├── Fingerprint jump (≥ 35%)?   → Shazam → snap if >3s drift
+  └── 12s since last drift check? → Shazam → correct drift if >1s
+```
 
 ### Test
-- Play a song, let it play for 2+ minutes
-- Verify lyrics stay synced (or auto-scroll stays smooth)
-- Check CPU usage — should be lower than before
+- Play a song — lyrics should scroll normally
+- Skip to a different position — lyrics should resync within 4-8 seconds
+- Let song play for 2+ minutes — watch for `Drift correction` messages
+- Lyrics should stay in sync without freezing after corrections
 
 ---
+
 
 ## Phase 4 — Tray UI Redesign
 
