@@ -12,7 +12,7 @@ from PyQt6.QtCore    import pyqtSignal, QObject
 from src.core        import settings
 from src.core.audio      import record_audio
 from src.core.recognizer import recognise_song
-from src.core.cache      import is_cached, get_cached_song, cache_song
+from src.core.cache      import is_cached, get_cached_song, cache_song, flush as flush_cache
 from src.lyrics.fetcher  import fetch_lyrics
 from src.ui.overlay      import LyricsOverlay
 from src.ui.tray         import SystemTray
@@ -592,6 +592,7 @@ class LyricsLayApp:
         exit_code = self.app.exec()
         self.running = False
         self._unregister_hotkeys()
+        flush_cache()
         sys.exit(exit_code)
 
     def _initial_identify(self):
