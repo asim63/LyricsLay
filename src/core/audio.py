@@ -3,30 +3,71 @@ import numpy as np
 import config
 
 
+# ── Module-level singleton — created once, reused across all calls ──────────
+_pyaudio_instance = None
+_device_info = None  # (native_rate, native_channels, device_index, name)
+
+
+def _get_pyaudio() -> pyaudio.PyAudio:
+    """Returns the shared PyAudio instance, creating it only once."""
+    global _pyaudio_instance
+    if _pyaudio_instance is None:
+        _pyaudio_instance = pyaudio.PyAudio()
+    return _pyaudio_instance
+
+
+def _get_cached_device():
+    """
+    Returns cached device info (rate, channels, index, name) or None.
+    Re-enumerates only if cache is empty.
+    """
+    global _device_info
+
+    if _device_info is not None:
+        return _device_info
+
+    p = _get_pyaudio()
+    device = _get_loopback_device(p)
+
+    if device is None:
+        return None
+
+    _device_info = (
+        int(device["defaultSampleRate"]),
+        int(device["maxInputChannels"]),
+        device["index"],
+        device["name"],
+    )
+    return _device_info
+
+
+def invalidate_device_cache():
+    """Call when audio device changes (e.g. speaker ↔ headphones switch)."""
+    global _device_info
+    _device_info = None
+
+
 def record_audio(duration=config.SAMPLE_DURATION) -> np.ndarray:
     """
     Records system audio using WASAPI loopback.
-    Automatically recovers from device switches
-    (speaker ↔ headphones).
+    Reuses the PyAudio instance and caches device info for speed.
     """
 
     print(f"[Audio] Listening for {duration} seconds...")
 
-    p = pyaudio.PyAudio()
+    p = _get_pyaudio()
 
     try:
-        device = _get_loopback_device(p)
+        dev_info = _get_cached_device()
 
-        if device is None:
+        if dev_info is None:
             print("[Audio] No loopback device found — falling back to default input")
-            p.terminate()
             return _record_fallback(duration)
 
-        native_rate = int(device["defaultSampleRate"])
-        native_channels = int(device["maxInputChannels"])
+        native_rate, native_channels, device_index, device_name = dev_info
 
         print(
-            f"[Audio] Using device: {device['name']} "
+            f"[Audio] Using device: {device_name} "
             f"at {native_rate}Hz, {native_channels}ch"
         )
 
@@ -35,7 +76,7 @@ def record_audio(duration=config.SAMPLE_DURATION) -> np.ndarray:
             channels=native_channels,
             rate=native_rate,
             input=True,
-            input_device_index=device["index"],
+            input_device_index=device_index,
             frames_per_buffer=1024
         )
 
@@ -61,6 +102,8 @@ def record_audio(duration=config.SAMPLE_DURATION) -> np.ndarray:
 
                 except Exception as e:
                     print(f"[Audio] Stream read failed: {e}")
+                    # device may have switched — invalidate cache for next call
+                    invalidate_device_cache()
                     break
 
         finally:
@@ -72,10 +115,8 @@ def record_audio(duration=config.SAMPLE_DURATION) -> np.ndarray:
 
     except Exception as e:
         print(f"[Audio] Recording failed: {e}")
-        p.terminate()
+        invalidate_device_cache()
         return np.array([], dtype=np.int16)
-
-    p.terminate()
 
     if len(frames) == 0:
         print("[Audio] No audio captured.")
