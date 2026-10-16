@@ -1,6 +1,30 @@
 import requests
 import asyncio
+import threading
 import config
+
+
+# ── Module-level singletons — reused across all calls ───────────────────────
+_session = requests.Session()  # connection pooling + keep-alive
+_session.headers.update({"User-Agent": "Mozilla/5.0"})
+
+_event_loop = None
+_event_loop_lock = threading.Lock()
+
+
+def _get_event_loop():
+    """Returns a persistent event loop, creating one only once."""
+    global _event_loop
+    with _event_loop_lock:
+        if _event_loop is not None and _event_loop.is_running():
+            return _event_loop
+        _event_loop = asyncio.new_event_loop()
+        loop_thread = threading.Thread(
+            target=_event_loop.run_forever, daemon=True
+        )
+        loop_thread.start()
+        return _event_loop
+
 
 # ─── Main entry point ─────────────────────────────────────────────────────────
 
@@ -13,7 +37,9 @@ def fetch_lyrics(title: str, artist: str) -> list | None:
     print(f"[Fetcher] Looking for lyrics: {title} — {artist}")
 
     # try all three sources in parallel
-    result = asyncio.run(_fetch_all(title, artist))
+    loop = _get_event_loop()
+    future = asyncio.run_coroutine_threadsafe(_fetch_all(title, artist), loop)
+    result = future.result(timeout=15)  # 15s total timeout for all 3 sources
     return result
 
 async def _fetch_all(title: str, artist: str) -> list | None:
@@ -21,8 +47,6 @@ async def _fetch_all(title: str, artist: str) -> list | None:
     Fires all three APIs at the same time.
     Returns the best result — synced lyrics preferred over plain.
     """
-    import asyncio
-
     # run all three simultaneously
     results = await asyncio.gather(
         _fetch_lrclib(title, artist),
@@ -63,11 +87,10 @@ async def _fetch_lrclib(title: str, artist: str) -> list | None:
             "artist_name": artist,
         }
 
-        # run blocking request in a thread so it doesn't block async loop
         loop = asyncio.get_event_loop()
         response = await loop.run_in_executor(
             None,
-            lambda: requests.get(url, params=params, timeout=5)
+            lambda: _session.get(url, params=params, timeout=5)
         )
 
         if response.status_code != 200:
@@ -101,7 +124,7 @@ async def _fetch_lyricsovh(title: str, artist: str) -> list | None:
         loop = asyncio.get_event_loop()
         response = await loop.run_in_executor(
             None,
-            lambda: requests.get(url, timeout=5)
+            lambda: _session.get(url, timeout=5)
         )
 
         if response.status_code != 200:
@@ -130,13 +153,11 @@ async def _fetch_genius(title: str, artist: str) -> list | None:
         # step 1 — search for the song on Genius
         search_url = "https://genius.com/api/search/multi"
         params = {"q": f"{title} {artist}"}
-        headers = {"User-Agent": "Mozilla/5.0"}
 
         loop = asyncio.get_event_loop()
         response = await loop.run_in_executor(
             None,
-            lambda: requests.get(search_url, params=params,
-                                 headers=headers, timeout=5)
+            lambda: _session.get(search_url, params=params, timeout=5)
         )
 
         if response.status_code != 200:
@@ -152,7 +173,7 @@ async def _fetch_genius(title: str, artist: str) -> list | None:
         # step 2 — scrape the actual lyrics page
         page = await loop.run_in_executor(
             None,
-            lambda: requests.get(song_url, headers=headers, timeout=5)
+            lambda: _session.get(song_url, timeout=5)
         )
 
         if page.status_code != 200:

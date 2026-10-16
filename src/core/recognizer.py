@@ -1,33 +1,63 @@
 import asyncio
 import numpy as np
 import wave
-import os
-import tempfile
+import io
 import time
+import threading
 from shazamio import Shazam
 import config
 
 shazam = Shazam()
 
+# Persistent event loop for async Shazam calls
+_event_loop = None
+
+
+def _get_event_loop():
+    """Returns a persistent event loop, creating one only once."""
+    global _event_loop
+    if _event_loop is not None and _event_loop.is_running():
+        return _event_loop
+    _event_loop = asyncio.new_event_loop()
+    loop_thread = threading.Thread(
+        target=_event_loop.run_forever, daemon=True
+    )
+    loop_thread.start()
+    return _event_loop
+
+
+def _wav_bytes_from_audio(audio: np.ndarray) -> bytes:
+    """
+    Converts a numpy int16 array to WAV bytes in memory.
+    No disk I/O required.
+    """
+    buf = io.BytesIO()
+    with wave.open(buf, 'wb') as wf:
+        wf.setnchannels(1)
+        wf.setsampwidth(2)
+        wf.setframerate(config.SAMPLE_RATE)
+        wf.writeframes(audio.tobytes())
+    return buf.getvalue()
+
+
 def recognise_song(audio: np.ndarray) -> dict | None:
     """
-    Takes a numpy audio array, saves it as a WAV file,
-    sends it to Shazam, returns song info or None.
+    Takes a numpy audio array, converts to WAV bytes in memory,
+    sends to Shazam, returns song info or None.
     """
     print("[Recogniser] Sending audio to Shazam...")
 
-    # save WAV first
-    wav_path = os.path.join(tempfile.gettempdir(), "lyricslay_sample.wav")
-    _save_wav(audio, wav_path)
+    # build WAV bytes in memory — no disk write needed
+    wav_data = _wav_bytes_from_audio(audio)
 
-    # measure only the API call time — not WAV saving
+    # measure only the API call time
     send_time = time.time()
-    result    = asyncio.run(_recognise(wav_path))
-    shazam_delay_ms = (time.time() - send_time) * 1000
 
-    # clean up temp file
-    if os.path.exists(wav_path):
-        os.remove(wav_path)
+    loop = _get_event_loop()
+    future = asyncio.run_coroutine_threadsafe(_recognise(wav_data), loop)
+    result = future.result(timeout=15)  # 15s timeout for Shazam call
+
+    shazam_delay_ms = (time.time() - send_time) * 1000
 
     if not result:
         print("[Recogniser] No match found.")
@@ -38,23 +68,14 @@ def recognise_song(audio: np.ndarray) -> dict | None:
     print(f"[Recogniser] Shazam delay: {shazam_delay_ms/1000:.1f}s")
     return result
 
-def _save_wav(audio: np.ndarray, path: str):
-    """
-    Saves a numpy int16 array as a proper WAV file.
-    """
-    with wave.open(path, 'w') as wf:
-        wf.setnchannels(1)
-        wf.setsampwidth(2)
-        wf.setframerate(config.SAMPLE_RATE)
-        wf.writeframes(audio.tobytes())
 
-async def _recognise(wav_path: str) -> dict | None:
+async def _recognise(wav_data: bytes) -> dict | None:
     """
-    Internal async function — reads WAV and sends to Shazam.
+    Internal async function — sends WAV bytes to Shazam.
     Returns dict with song info or None.
     """
     try:
-        out = await shazam.recognize(wav_path)
+        out = await shazam.recognize(wav_data)
 
         if "track" not in out:
             return None
