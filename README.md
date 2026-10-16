@@ -30,8 +30,8 @@ The goal is simple — no browser extensions, no player integrations, no manual 
 
 | Platform | Status |
 |----------|--------|
-| Windows 10 | ✅ Supported |
-| Windows 11 | ✅ Supported |
+| Windows 10 | Supported |
+| Windows 11 | Supported |
 | macOS | Planned |
 | Linux | Planned |
 
@@ -124,19 +124,6 @@ Right-click the tray icon to:
 
 ---
 
-## Romanization
-
-When enabled, lyrics in Japanese and Korean are automatically converted to phonetic Latin script so you can follow along without knowing the script.
-
-| Language | Original | Romanized |
-|----------|----------|-----------|
-| Japanese | こんにちは | konnichiha |
-| Korean | 안녕하세요 | annyeonghaseyo |
-
-Toggle from the tray menu. Takes effect on the next song.
-
----
-
 ## How It Works
 
 LyricsLay continuously listens to system audio using Windows WASAPI loopback.
@@ -165,8 +152,6 @@ LRCLIB is tried first — it has time-synced LRC lyrics and succeeds for the maj
 | Audio Processing | NumPy |
 | Lyrics Fetching | requests + BeautifulSoup |
 | Hotkeys | pynput |
-| Japanese Romanization | pykakasi |
-| Korean Romanization | hangul-romanize |
 
 ---
 
@@ -243,7 +228,7 @@ MIT — see [LICENSE](LICENSE)
 
 ---
 
-> This entire project is completely vibecoded.
+> This project is vibecoded.
 
 ---
 
